@@ -87,12 +87,18 @@ class AppState extends ChangeNotifier {
     if (expired) {
       final String? refresh = await store.refreshToken();
       if (refresh != null && refresh.isNotEmpty) {
-        final TokenPoll result = await api.refreshUserToken(AppConfig.githubClientId, refresh);
-        if (result.kind == TokenPollKind.success && result.accessToken != null) {
-          token = result.accessToken;
-          await store.saveTokens(result.accessToken!, result.refreshToken ?? refresh, result.expiresIn);
-        } else {
-          sessionExpired = true;
+        try {
+          final TokenPoll result = await api.refreshUserToken(AppConfig.githubClientId, refresh);
+          if (result.kind == TokenPollKind.success && result.accessToken != null) {
+            token = result.accessToken;
+            await store.saveTokens(result.accessToken!, result.refreshToken ?? refresh, result.expiresIn);
+          } else {
+            sessionExpired = true;
+            sessionReady = true;
+            return;
+          }
+        } catch (error) {
+          bootError = error.toString();
           sessionReady = true;
           return;
         }

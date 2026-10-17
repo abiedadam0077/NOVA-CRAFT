@@ -7,10 +7,7 @@ import 'package:shared_preferences/shared_preferences.dart';
 /// previous Kotlin build, which used an AES-GCM Keystore key).
 class SecureStore {
   SecureStore({FlutterSecureStorage? secureStorage})
-      : _secure = secureStorage ??
-            const FlutterSecureStorage(
-              aOptions: AndroidOptions(encryptedSharedPreferences: true),
-            );
+      : _secure = secureStorage ?? const FlutterSecureStorage();
 
   final FlutterSecureStorage _secure;
   SharedPreferences? _prefs;
