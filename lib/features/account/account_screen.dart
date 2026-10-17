@@ -124,7 +124,7 @@ class _AccountScreenState extends State<AccountScreen> {
       if (!mounted) return;
       setState(() {
         _tokenStatus = L10n.f('connTokenOk', <String, String>{
-          'login': me?.login ?? '—',
+          'login': me.login,
           'count': '${installations.length}',
         });
         _secretStatus = secretStatus;
