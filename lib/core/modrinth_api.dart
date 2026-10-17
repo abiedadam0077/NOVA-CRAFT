@@ -131,6 +131,44 @@ class ModrinthProject {
   }
 }
 
+/// Loader families accepted for a Java target. `plugins` means a server-side
+/// plugin platform (Paper family); otherwise client/server mods (Fabric family).
+/// Modrinth returns loader names in lowercase, so the comparison is exact.
+List<String> modrinthAllowedLoaders({required bool plugins, String? serverLoader}) {
+  if (!plugins) return const <String>['fabric', 'quilt'];
+  switch (serverLoader) {
+    case 'spigot':
+      return const <String>['spigot', 'bukkit', 'paper', 'purpur'];
+    case 'purpur':
+      return const <String>['purpur', 'paper', 'spigot', 'bukkit'];
+    default:
+      return const <String>['paper', 'purpur', 'spigot', 'bukkit'];
+  }
+}
+
+/// True when at least one loader the version declares is accepted here.
+bool modrinthLoaderMatches(ModrinthVersion version, List<String> allowedLoaders) =>
+    version.loaders.any((String loader) => allowedLoaders.contains(loader));
+
+/// True when the version supports the target game version. An empty target
+/// (unknown server version) accepts any version instead of guessing.
+bool modrinthVersionMatches(ModrinthVersion version, String gameVersion) =>
+    gameVersion.isEmpty || version.gameVersions.contains(gameVersion);
+
+/// Full compatibility gate used before a jar is ever downloaded or written.
+bool modrinthCompatible(
+  ModrinthVersion version, {
+  required List<String> allowedLoaders,
+  required String gameVersion,
+}) =>
+    modrinthLoaderMatches(version, allowedLoaders) &&
+    modrinthVersionMatches(version, gameVersion);
+
+/// Folder a jar must be written to, relative to the repository root. This is
+/// always inside the server data root, never the repository root itself.
+String modrinthInstallFolder({required bool plugins, required String serverRoot}) =>
+    '$serverRoot/${plugins ? 'plugins' : 'mods'}';
+
 class ModrinthVersionFile {
   const ModrinthVersionFile({required this.url, required this.filename, required this.size});
 

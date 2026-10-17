@@ -82,7 +82,8 @@ class _ModsViewState extends State<ModsView> {
     }
   }
 
-  String get _folder => _tab == 0 ? '${widget.config.serverRoot}/mods' : '${widget.config.serverRoot}/plugins';
+  String get _folder =>
+      modrinthInstallFolder(plugins: _tab == 1, serverRoot: widget.config.serverRoot);
 
   String get _projectType => _tab == 0 ? 'mod' : 'plugin';
 
@@ -159,23 +160,13 @@ class _ModsViewState extends State<ModsView> {
     return null;
   }
 
-  List<String> get _allowedLoaders {
-    if (_tab == 0) return <String>['fabric', 'quilt'];
-    switch (_loader) {
-      case 'spigot':
-        return <String>['spigot', 'bukkit', 'paper', 'purpur'];
-      case 'purpur':
-        return <String>['purpur', 'paper', 'spigot', 'bukkit'];
-      default:
-        return <String>['paper', 'purpur', 'spigot', 'bukkit'];
-    }
-  }
+  List<String> get _allowedLoaders =>
+      modrinthAllowedLoaders(plugins: _tab == 1, serverLoader: _loader);
 
   /// Human-readable reason a concrete version cannot be installed here.
   String _rejectionReason(ModrinthVersion version) {
-    final List<String> allowed = _allowedLoaders;
-    final bool loaderOk = version.loaders.any((String l) => allowed.contains(l));
-    final bool versionOk = widget.config.mcVersion.isEmpty || version.gameVersions.contains(widget.config.mcVersion);
+    final bool loaderOk = modrinthLoaderMatches(version, _allowedLoaders);
+    final bool versionOk = modrinthVersionMatches(version, widget.config.mcVersion);
     if (!loaderOk) {
       return L10n.f('modRejectLoaders', <String, String>{
         'loaders': version.loaders.isEmpty ? '—' : version.loaders.join(', '),
@@ -191,11 +182,11 @@ class _ModsViewState extends State<ModsView> {
     return L10n.t('modIncompatibleShort');
   }
 
-  bool _compatible(ModrinthVersion version) {
-    final bool loaderOk = version.loaders.any((String l) => _allowedLoaders.contains(l));
-    final bool versionOk = widget.config.mcVersion.isEmpty || version.gameVersions.contains(widget.config.mcVersion);
-    return loaderOk && versionOk;
-  }
+  bool _compatible(ModrinthVersion version) => modrinthCompatible(
+        version,
+        allowedLoaders: _allowedLoaders,
+        gameVersion: widget.config.mcVersion,
+      );
 
   Future<void> _install(ModrinthProject project) async {
     setState(() => _busyId = project.id);

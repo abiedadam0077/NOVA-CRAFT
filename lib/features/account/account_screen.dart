@@ -108,7 +108,7 @@ class _AccountScreenState extends State<AccountScreen> {
     try {
       final AppState state = AppScope.read(context);
       await state.ensureTokenFresh();
-      final GhUser? me = await state.api.getUser();
+      final GhUser me = await state.api.getUser();
       final List<GhInstallation> installations = await state.api.listInstallations();
       String secretStatus = L10n.t('connNoServer');
       final ServerConfig? server = state.selected;
