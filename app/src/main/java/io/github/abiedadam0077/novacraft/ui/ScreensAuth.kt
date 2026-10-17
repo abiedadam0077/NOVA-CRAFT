@@ -102,6 +102,7 @@ fun AuthScreen(vm: AppViewModel) {
     }
 }
 
+@OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun WizardScreen(vm: AppViewModel, onDone: () -> Unit) {
     val ctx = LocalContext.current; val scope = rememberCoroutineScope()
