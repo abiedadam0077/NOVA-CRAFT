@@ -35,6 +35,17 @@
             android:name="flutterEmbedding"
             android:value="2" />
 
+        <!--
+          Flutter 3.35 turns Impeller on by default. Impeller has documented
+          SIGSEGV/SIGABRT crashes on some Mali/Adreno devices (flutter#175562,
+          flutter#190195). This app is a management UI, so correctness matters
+          more than the renderer: opt out until the device crash is confirmed
+          fixed upstream. Remove this block to re-enable Impeller.
+        -->
+        <meta-data
+            android:name="io.flutter.embedding.android.EnableImpeller"
+            android:value="false" />
+
         <provider
             android:name="androidx.core.content.FileProvider"
             android:authorities="${applicationId}.fileprovider"

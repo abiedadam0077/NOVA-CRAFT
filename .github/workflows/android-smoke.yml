@@ -26,7 +26,7 @@ permissions:
 
 env:
   PACKAGE: io.github.abiedadam0077.novacraft
-  TAG: ${{ inputs.tag || 'flutter-apk-39058403987-1' }}
+  TAG_INPUT: ${{ inputs.tag }}
   APK_GLOB: ${{ inputs.apk_glob || '*release-debugsigned.apk' }}
 
 jobs:
@@ -42,6 +42,27 @@ jobs:
         with:
           distribution: temurin
           java-version: "17"
+
+      - name: Resolve the release built from this commit
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="${TAG_INPUT:-}"
+          if [ -z "$TAG" ]; then
+            for i in $(seq 1 45); do
+              TAG=$(gh release list --limit 20 --json tagName,targetCommitish \
+                --jq ".[] | select(.targetCommitish==\"$GITHUB_SHA\") | .tagName" | head -1)
+              if [ -n "$TAG" ]; then break; fi
+              sleep 20
+            done
+          fi
+          if [ -z "$TAG" ]; then
+            echo "No release was published for $GITHUB_SHA"
+            exit 1
+          fi
+          echo "TAG=$TAG" >> "$GITHUB_ENV"
+          echo "resolved tag: $TAG"
 
       - name: Download the exact published APK
         env:
@@ -93,6 +114,17 @@ jobs:
             "$ZIPALIGN" -c -v -P 16 4 "$APK" 2>&1 | tail -12 || true
             echo '-- 4 KB check --'
             "$ZIPALIGN" -c -v 4 "$APK" 2>&1 | tail -6 || true
+            echo '```'
+            echo "## ELF LOAD alignment (16 KB devices need 2**14 or more)"
+            echo '```'
+            rm -rf smoke/lib && mkdir -p smoke/lib
+            unzip -o -q "$APK" 'lib/*' -d smoke/lib || true
+            for SO in $(find smoke/lib -name '*.so' | sort); do
+              echo "$SO"
+              if command -v readelf >/dev/null 2>&1; then
+                readelf -lW "$SO" 2>/dev/null | awk '/LOAD/{print "  align " $NF}' | sort -u
+              fi
+            done
             echo '```'
           } > smoke/report.txt 2>&1
           cat smoke/report.txt
