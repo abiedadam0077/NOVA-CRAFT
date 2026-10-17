@@ -26,6 +26,8 @@ permissions:
 
 env:
   PACKAGE: io.github.abiedadam0077.novacraft
+  TAG: ${{ inputs.tag || 'flutter-apk-39058403987-1' }}
+  APK_GLOB: ${{ inputs.apk_glob || '*arm64*.apk' }}
 
 jobs:
   smoke:
@@ -47,9 +49,15 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p smoke/apks
-          gh release download "${{ inputs.tag }}" --pattern '*.apk' --dir smoke/apks
-          ls -l smoke/apks
-          APK=$(find smoke/apks -name '${{ inputs.apk_glob }}' | head -1)
+          set +e
+          gh release download "$TAG" --pattern '*.apk' --dir smoke/apks > smoke/download.txt 2>&1
+          CODE=$?
+          set -e
+          echo "tag=$TAG download_exit=$CODE" >> smoke/download.txt
+          cat smoke/download.txt
+          ls -l smoke/apks || true
+          if [ "$CODE" -ne 0 ]; then exit "$CODE"; fi
+          APK=$(find smoke/apks -name "$APK_GLOB" | head -1)
           test -n "$APK"
           echo "APK=$APK" >> "$GITHUB_ENV"
 
@@ -122,9 +130,13 @@ jobs:
           {
             echo "## Android launch smoke test"
             echo
-            echo "- Tag: \`${{ inputs.tag }}\`"
+            echo "- Tag: \`${TAG}\`"
             echo "- Commit: \`${GITHUB_SHA}\`"
             echo "- APK: \`${APK:-missing}\`"
+            echo "- Download:"
+            echo '```'
+            cat smoke/download.txt 2>/dev/null || echo 'not run'
+            echo '```'
             echo "- Device:"
             echo '```'
             cat smoke/device.txt 2>/dev/null || echo 'no device data'
