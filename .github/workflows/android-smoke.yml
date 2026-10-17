@@ -1,0 +1,169 @@
+name: Android launch smoke test
+
+# Downloads an already-published APK, verifies its signature with the Android
+# build tools, installs it on a fresh emulator and records whether the process
+# survives the splash screen. Every result is posted as a commit comment so it
+# can be audited from outside the runner.
+
+on:
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: Release tag that contains the APK to test
+        required: true
+        default: flutter-apk-39058403987-1
+      apk_glob:
+        description: Glob used to pick one APK from the release
+        required: true
+        default: "*arm64*.apk"
+
+permissions:
+  contents: write
+
+env:
+  PACKAGE: io.github.abiedadam0077.novacraft
+
+jobs:
+  smoke:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 50
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Download the exact published APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          mkdir -p smoke/apks
+          gh release download "${{ inputs.tag }}" --pattern '*.apk' --dir smoke/apks
+          ls -l smoke/apks
+          APK=$(find smoke/apks -name '${{ inputs.apk_glob }}' | head -1)
+          test -n "$APK"
+          echo "APK=$APK" >> "$GITHUB_ENV"
+
+      - name: Verify signature, alignment and structure
+        run: |
+          set -uo pipefail
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt | sort -V | tail -1)
+          ZIPALIGN=$(find "$ANDROID_HOME/build-tools" -name zipalign | sort -V | tail -1)
+          JARSIGNER=$(command -v jarsigner || true)
+          {
+            echo "## APK under test"
+            echo '```'
+            ls -l "$APK"
+            sha256sum "$APK"
+            echo '```'
+            echo "## apksigner verify"
+            echo '```'
+            "$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1
+            echo "exit=$?"
+            echo '```'
+            echo "## jarsigner (v1 / JAR signature)"
+            echo '```'
+            if [ -n "$JARSIGNER" ]; then "$JARSIGNER" -verify -certs "$APK" 2>&1 | head -30; else echo "jarsigner not found"; fi
+            echo '```'
+            echo "## aapt badging"
+            echo '```'
+            "$AAPT" dump badging "$APK" 2>&1 | head -12
+            echo '```'
+            echo "## native libraries and 16 KB alignment"
+            echo '```'
+            unzip -l "$APK" | grep -E 'lib/|resources.arsc|AndroidManifest' || true
+            "$ZIPALIGN" -c -v -P 16 4 "$APK" 2>&1 | tail -12 || true
+            echo '-- 4 KB check --'
+            "$ZIPALIGN" -c -v 4 "$APK" 2>&1 | tail -6 || true
+            echo '```'
+          } > smoke/report.txt 2>&1
+          cat smoke/report.txt
+
+      - name: Install and launch on emulator
+        uses: ReactiveCircus/android-emulator-runner@v2
+        with:
+          api-level: 34
+          target: google_apis
+          arch: x86_64
+          profile: pixel_6
+          disable-animations: true
+          emulator-boot-timeout: 900
+          script: |
+            set -uo pipefail
+            echo "abi: $(adb shell getprop ro.product.cpu.abilist | tr -d '\r')" > smoke/device.txt
+            adb logcat -c
+            adb install -r "$APK" > smoke/install.txt 2>&1
+            echo "install_exit=$?" >> smoke/install.txt
+            adb shell am start -W -n "$PACKAGE/.MainActivity" > smoke/start.txt 2>&1
+            echo "start_exit=$?" >> smoke/start.txt
+            sleep 15
+            adb shell pidof "$PACKAGE" > smoke/pid.txt 2>&1 || true
+            adb shell dumpsys activity activities > smoke/activities.txt 2>&1 || true
+            adb shell dumpsys package "$PACKAGE" > smoke/package.txt 2>&1 || true
+            adb exec-out screencap -p > smoke/screen.png 2>/dev/null || true
+            adb logcat -d -v threadtime > smoke/logcat-full.txt 2>&1 || true
+            grep -E "AndroidRuntime|FATAL|libflutter|flutter|Nova|novacraft|Impeller|signal|crash" smoke/logcat-full.txt | tail -400 > smoke/logcat.txt || true
+            cat smoke/install.txt smoke/start.txt smoke/pid.txt smoke/device.txt
+
+      - name: Build the evidence report
+        if: always()
+        run: |
+          set -uo pipefail
+          {
+            echo "## Android launch smoke test"
+            echo
+            echo "- Tag: \`${{ inputs.tag }}\`"
+            echo "- Commit: \`${GITHUB_SHA}\`"
+            echo "- APK: \`${APK:-missing}\`"
+            echo "- Device:"
+            echo '```'
+            cat smoke/device.txt 2>/dev/null || echo 'no device data'
+            echo '```'
+            echo "- Install:"
+            echo '```'
+            cat smoke/install.txt 2>/dev/null || echo 'not run'
+            echo '```'
+            echo "- am start -W:"
+            echo '```'
+            cat smoke/start.txt 2>/dev/null || echo 'not run'
+            echo '```'
+            echo "- PID after 15 s:"
+            echo '```'
+            cat smoke/pid.txt 2>/dev/null || echo 'none'
+            echo '```'
+            echo "- Resumed activity / package facts:"
+            echo '```'
+            grep -E "mResumedActivity|topResumedActivity|versionName|primaryCpuAbi|signatures" smoke/activities.txt smoke/package.txt 2>/dev/null | head -20 || echo 'none'
+            echo '```'
+            echo
+            cat smoke/report.txt 2>/dev/null || true
+            echo
+            echo "## Filtered logcat"
+            echo '```'
+            tail -250 smoke/logcat.txt 2>/dev/null || echo 'no logcat'
+            echo '```'
+          } > smoke/summary.md
+          wc -c smoke/summary.md
+
+      - name: Post evidence as a commit comment
+        if: always()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+            -f body="$(head -c 55000 smoke/summary.md)" || true
+
+      - name: Upload raw evidence
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: android-smoke-${{ github.run_id }}
+          path: smoke/
+          if-no-files-found: warn
+          retention-days: 30
