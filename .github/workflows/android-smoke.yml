@@ -115,6 +115,8 @@ jobs:
           export ANDROID_AVD_HOME="$HOME/.android/avd"
           mkdir -p "$ANDROID_AVD_HOME"
           export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
+          sudo chmod 666 /dev/kvm 2>/dev/null || true
+          "$ANDROID_HOME/emulator/emulator" -accel-check > smoke/accel.txt 2>&1 || true
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           AVDMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
           : > smoke/emulator.txt
@@ -127,6 +129,7 @@ jobs:
           ls -la "$ANDROID_AVD_HOME" >> smoke/avd.txt 2>&1 || true
           nohup "$ANDROID_HOME/emulator/emulator" -avd nova30 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -accel on -verbose > smoke/emulator.log 2>&1 &
           echo "emulator_pid=$!" >> smoke/emulator.txt
+          "$ANDROID_HOME/emulator/emulator" -accel-check >> smoke/emulator.txt 2>&1 || true
           adb start-server >> smoke/emulator.txt 2>&1 || true
           timeout 300 adb wait-for-device >> smoke/emulator.txt 2>&1 || true
           BOOTED=0
