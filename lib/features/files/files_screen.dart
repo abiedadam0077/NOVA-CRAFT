@@ -271,6 +271,35 @@ class _FileBrowserState extends State<FileBrowser> {
     await _openExternal(entry);
   }
 
+  /// Saves the real file bytes to a location the user picks. This never
+  /// fabricates content: if the file is too large for the contents API the app
+  /// says so instead of producing a truncated file.
+  Future<void> _download(DirEntry entry) async {
+    if (entry.size > 20 * 1024 * 1024) {
+      showNovaToast(context, L10n.t('fileTooLarge'), kind: ToastKind.error);
+      return;
+    }
+    setState(() => _busyPath = entry.path);
+    try {
+      final AppState state = AppScope.read(context);
+      final Uint8List bytes = await state.api.getFileBytes(widget.config.repoOwner, widget.config.repoName, entry.path);
+      if (!mounted) return;
+      final String? target = await FilePicker.platform.saveFile(
+        dialogTitle: entry.name,
+        fileName: entry.name,
+        bytes: bytes,
+      );
+      if (!mounted) return;
+      if (target == null) return;
+      showNovaToast(context, L10n.t('downloadedFile'), kind: ToastKind.success);
+    } catch (error) {
+      if (!mounted) return;
+      showNovaToast(context, Fmt.error(error), kind: ToastKind.error);
+    } finally {
+      if (mounted) setState(() => _busyPath = null);
+    }
+  }
+
   Future<void> _openExternal(DirEntry entry) async {
     final String url = entry.downloadUrl ?? 'https://github.com/${widget.config.repoFull}/blob/$_branch/${entry.path}';
     final bool ok = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
@@ -486,7 +515,7 @@ class _FileBrowserState extends State<FileBrowser> {
                   label: L10n.t('download'),
                   onTap: () {
                     Navigator.of(ctx).pop();
-                    _openExternal(entry);
+                    _download(entry);
                   },
                 ),
               _ActionTile(

@@ -697,6 +697,7 @@ const Map<String, String> ar = <String, String>{
   'autoRestartBody': 'يشغّل دورة جديدة تلقائياً بعد انتهاء الدورة الحالية.',
   'provisioningPlayit': 'تثبيت مفتاح Playit.gg...',
   'runnerLimitNote': 'يعمل السيرفر عبر GitHub Actions: الدورة الواحدة محدودة (~5.5 ساعة) وتعتمد على حدود GitHub، وليست استضافة دائمة 24/7.',
+  'downloadedFile': 'تم حفظ الملف على الجهاز',
 };
 
 const Map<String, String> en = <String, String>{
@@ -1355,4 +1356,5 @@ const Map<String, String> en = <String, String>{
   'autoRestartBody': 'Starts the next cycle automatically when the current one ends.',
   'provisioningPlayit': 'Installing the Playit.gg secret…',
   'runnerLimitNote': 'The server runs on GitHub Actions: one cycle is capped (~5.5 h) and depends on GitHub limits — it is not permanent 24/7 hosting.',
+  'downloadedFile': 'File saved to your device',
 };

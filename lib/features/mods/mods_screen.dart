@@ -1,6 +1,7 @@
 import 'dart:async';
 import 'dart:typed_data';
 
+import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/formatters.dart';
@@ -421,6 +422,51 @@ class _ModsViewState extends State<ModsView> {
     );
   }
 
+  /// Uploads a local .jar straight into the correct server folder. The file is
+  /// never modified or renamed beyond its own name, and it is rejected when the
+  /// server type cannot load it.
+  Future<void> _uploadJar() async {
+    if (!_supported) return;
+    final FilePickerResult? result = await FilePicker.platform.pickFiles(
+      type: FileType.custom,
+      allowedExtensions: <String>['jar'],
+      withData: true,
+    );
+    if (result == null || !mounted) return;
+    final PlatformFile file = result.files.single;
+    final Uint8List? bytes = file.bytes;
+    if (bytes == null) {
+      showNovaToast(context, L10n.t('fileTooLarge'), kind: ToastKind.error);
+      return;
+    }
+    if (bytes.length > 45 * 1024 * 1024) {
+      showNovaToast(context, L10n.t('fileTooLarge'), kind: ToastKind.error);
+      return;
+    }
+    final String target = '$_folder/${file.name}';
+    setState(() => _busyId = target);
+    try {
+      final AppState state = AppScope.read(context);
+      await state.api.putFile(
+        widget.config.repoOwner,
+        widget.config.repoName,
+        target,
+        bytes,
+        'nova: upload ${file.name}',
+        sha: await state.api.fileSha(widget.config.repoOwner, widget.config.repoName, target),
+        branch: _branch,
+      );
+      if (!mounted) return;
+      showNovaToast(context, L10n.t('uploadedFile'), kind: ToastKind.success);
+      await _refreshInstalled();
+    } catch (error) {
+      if (!mounted) return;
+      showNovaToast(context, Fmt.error(error), kind: ToastKind.error);
+    } finally {
+      if (mounted) setState(() => _busyId = null);
+    }
+  }
+
   Widget _browseBody() {
     final p = context.nova;
     return Column(
@@ -479,6 +525,15 @@ class _ModsViewState extends State<ModsView> {
             ),
             const Spacer(),
             if (_searching) const SizedBox(width: 16, height: 16, child: NovaLoader(size: 16, stroke: 2)),
+            const SizedBox(width: 6),
+            NovaIconButton(
+              icon: Icons.upload_file_rounded,
+              size: 34,
+              iconSize: 17,
+              filled: true,
+              tooltip: L10n.t('uploadFile'),
+              onTap: _uploadJar,
+            ),
           ],
         ),
         const SizedBox(height: 10),
