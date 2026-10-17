@@ -97,15 +97,29 @@ jobs:
           } > smoke/report.txt 2>&1
           cat smoke/report.txt
 
+      - name: KVM availability
+        run: |
+          {
+            echo "## KVM / host"
+            echo '```'
+            ls -l /dev/kvm 2>&1 || true
+            echo "vmx/svm flags: $(grep -c -E 'vmx|svm' /proc/cpuinfo || true)"
+            free -m || true
+            echo '```'
+          } | tee smoke/kvm.txt
+
       - name: Install and launch on emulator
         uses: ReactiveCircus/android-emulator-runner@v2
         with:
-          api-level: 34
-          target: google_apis
+          api-level: 30
+          target: default
           arch: x86_64
-          profile: pixel_6
+          profile: pixel_2
           disable-animations: true
-          emulator-boot-timeout: 900
+          emulator-boot-timeout: 420
+          ram-size: 2048
+          heap-size: 512
+          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
           script: |
             set -uo pipefail
             echo "abi: $(adb shell getprop ro.product.cpu.abilist | tr -d '\r')" > smoke/device.txt
@@ -133,6 +147,7 @@ jobs:
             echo "- Tag: \`${TAG}\`"
             echo "- Commit: \`${GITHUB_SHA}\`"
             echo "- APK: \`${APK:-missing}\`"
+            cat smoke/kvm.txt 2>/dev/null || true
             echo "- Download:"
             echo '```'
             cat smoke/download.txt 2>/dev/null || echo 'not run'
