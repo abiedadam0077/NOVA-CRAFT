@@ -54,8 +54,8 @@ jobs:
         env:
           NOVA_KEYSTORE_PATH: ${{ runner.temp }}/nova-release.p12
           NOVA_KEYSTORE_PASSWORD: ${{ secrets.NOVA_KEYSTORE_PASSWORD }}
-          NOVA_KEY_ALIAS: ${{ secrets.NOVA_KEY_ALIAS }}
-          NOVA_KEY_PASSWORD: ${{ secrets.NOVA_KEY_PASSWORD }}
+          NOVA_KEY_ALIAS: nova-craft
+          NOVA_KEY_PASSWORD: ${{ secrets.NOVA_KEYSTORE_PASSWORD }}
         run: gradle assembleRelease --stacktrace
       - name: Verify release signature
         if: ${{ inputs.release }}
@@ -63,6 +63,15 @@ jobs:
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
           "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
           sha256sum app/build/outputs/apk/release/app-release.apk
+      - name: Publish GitHub Release with APK
+        if: ${{ inputs.release }}
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          TAG="v1.0.0"
+          if gh release view "$TAG" > /dev/null 2>&1; then TAG="v1.0.0-run${{ github.run_number }}"; fi
+          gh release create "$TAG" app/build/outputs/apk/release/app-release.apk --title "NOVA CRAFT $TAG" --notes "NOVA CRAFT Android release (signed). Package: io.github.abiedadam0077.novacraft"
+          echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
       - name: Upload release APK
         if: ${{ inputs.release }}
         uses: actions/upload-artifact@v4
