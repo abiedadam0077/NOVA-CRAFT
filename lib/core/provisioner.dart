@@ -7,15 +7,21 @@ import 'github_api.dart';
 import 'models.dart';
 import 'workflow_templates.dart';
 
-/// Writes the files that make a repository a NOVA CRAFT server, and exposes the
-/// real operations the UI is allowed to trigger.
+/// Writes the files that turn a repository into a NOVA CRAFT server, and
+/// exposes only the operations the UI is allowed to trigger.
+///
+/// Server data always lives under [ServerConfig.serverRoot]; repository files
+/// (source code, CI, docs) are never touched by the file browser.
 class Provisioner {
   const Provisioner._();
 
   static const String configPath = 'nova-craft/server.json';
   static const String statusPath = 'nova-craft/status.json';
+  static const String liveLogPath = 'nova-craft/live.log';
   static const String commandsPath = 'nova-craft/commands';
   static const String workflowFile = 'novacraft-server.yml';
+  static const String runnerPath = 'nova-craft/runner.sh';
+  static const String configScriptPath = 'nova-craft/config.py';
 
   static Future<void> _putText(GitHubApi api, ServerConfig c, String path, String text, String message) async {
     final String? sha = await api.fileSha(c.repoOwner, c.repoName, path);
@@ -27,27 +33,51 @@ class Provisioner {
     await api.putFile(c.repoOwner, c.repoName, path, bytes, message, sha: sha);
   }
 
+  static Future<void> _deleteIfPresent(GitHubApi api, ServerConfig c, String path, String message) async {
+    final String? sha = await api.fileSha(c.repoOwner, c.repoName, path);
+    if (sha != null) await api.deleteFile(c.repoOwner, c.repoName, path, sha, message);
+  }
+
+  /// Full provisioning: repository metadata, runner, workflow, properties,
+  /// and — only when explicitly chosen — the EULA marker.
   static Future<void> writeServerFiles(GitHubApi api, ServerConfig c, Uint8List? iconPng) async {
     await _putText(api, c, configPath, const JsonEncoder.withIndent('  ').convert(c.toJson()), 'nova: server config');
-    await _putText(api, c, '$commandsPath/.gitkeep', '', 'nova: commands queue');
-    if (c.edition == 'BEDROCK') {
-      await _putText(api, c, 'server/server.properties', WorkflowTemplates.bedrockProperties(c), 'nova: bedrock properties');
-    } else {
-      await _putText(api, c, 'server/server.properties', WorkflowTemplates.javaProperties(c), 'nova: java properties');
-      await _putText(api, c, 'server/eula.txt', 'eula=true\n', 'nova: accept eula');
-    }
+    await _putText(api, c, configScriptPath, WorkflowTemplates.configScript, 'nova: runner config bridge');
+    await _putText(api, c, runnerPath, WorkflowTemplates.runnerScript, 'nova: runner');
     await _putText(api, c, '.github/workflows/$workflowFile', WorkflowTemplates.serverWorkflow(c.id), 'nova: server workflow');
+    await _putText(api, c, '$commandsPath/.gitkeep', '', 'nova: commands queue');
+
+    final String root = c.serverRoot;
+    if (c.isBedrock) {
+      await _putText(api, c, '$root/server.properties', WorkflowTemplates.bedrockProperties(c), 'nova: bedrock properties');
+    } else {
+      await _putText(api, c, '$root/server.properties', WorkflowTemplates.javaProperties(c), 'nova: java properties');
+      if (c.eulaAccepted) {
+        await _putText(api, c, '$root/eula.txt', 'eula=true\n', 'nova: accept eula');
+      } else {
+        // Never leave an accepted marker behind when the user did not agree.
+        await _deleteIfPresent(api, c, '$root/eula.txt', 'nova: eula not accepted');
+      }
+    }
+
     if (iconPng != null) {
-      await _putBytes(api, c, 'server/server-icon.png', iconPng, 'nova: server icon');
+      await _putBytes(api, c, '$root/server-icon.png', iconPng, 'nova: server icon');
     }
   }
 
+  /// Writes settings without touching the EULA flag or the download pin.
   static Future<void> updateConfig(GitHubApi api, ServerConfig c) async {
     await _putText(api, c, configPath, const JsonEncoder.withIndent('  ').convert(c.toJson()), 'nova: update config');
-    if (c.edition == 'BEDROCK') {
-      await _putText(api, c, 'server/server.properties', WorkflowTemplates.bedrockProperties(c), 'nova: update properties');
+    final String root = c.serverRoot;
+    if (c.isBedrock) {
+      await _putText(api, c, '$root/server.properties', WorkflowTemplates.bedrockProperties(c), 'nova: update properties');
     } else {
-      await _putText(api, c, 'server/server.properties', WorkflowTemplates.javaProperties(c), 'nova: update properties');
+      await _putText(api, c, '$root/server.properties', WorkflowTemplates.javaProperties(c), 'nova: update properties');
+      if (c.eulaAccepted) {
+        await _putText(api, c, '$root/eula.txt', 'eula=true\n', 'nova: accept eula');
+      } else {
+        await _deleteIfPresent(api, c, '$root/eula.txt', 'nova: eula withdrawn');
+      }
     }
   }
 
@@ -68,20 +98,28 @@ class Provisioner {
     );
   }
 
-  static Future<void> sendCommand(GitHubApi api, ServerConfig c, String command) async {
-    final String name = '$commandsPath/${DateTime.now().millisecondsSinceEpoch}-${_randomSuffix()}.txt';
-    final String? sha = await api.fileSha(c.repoOwner, c.repoName, name);
-    await api.putText(c.repoOwner, c.repoName, name, command, 'nova: queue command', sha: sha);
+  static Future<void> cancelRun(GitHubApi api, ServerConfig c, int runId) {
+    return api.cancelRun(c.repoOwner, c.repoName, runId);
   }
 
-  /// Stops gracefully (the workflow saves and backs up first). When a run is
-  /// active the stop command is picked up within ~12s.
+  static Future<void> sendCommand(GitHubApi api, ServerConfig c, String command) async {
+    final String trimmed = command.trim();
+    if (trimmed.isEmpty || trimmed.length > 512) {
+      throw ApiException(400, 'Command is empty or too long');
+    }
+    final String name = '$commandsPath/${DateTime.now().millisecondsSinceEpoch}-${_randomSuffix()}.txt';
+    final String? sha = await api.fileSha(c.repoOwner, c.repoName, name);
+    await api.putText(c.repoOwner, c.repoName, name, trimmed, 'nova: queue command', sha: sha);
+  }
+
+  /// Stops gracefully: the runner flushes saves, uploads a backup, then exits.
   static Future<void> stopServer(GitHubApi api, ServerConfig c) async {
     await sendCommand(api, c, 'nova:stop');
   }
 
-  /// A stop request makes the workflow skip its self-restart, so an explicit
-  /// restart also dispatches a new cycle. GitHub `concurrency` serialises it.
+  /// A stop request makes the runner skip its self-restart; the explicit
+  /// dispatch below then starts a fresh cycle. GitHub `concurrency` serialises
+  /// the two runs instead of racing them.
   static Future<void> restartServer(GitHubApi api, ServerConfig c, {required bool activeRun}) async {
     if (activeRun) {
       await sendCommand(api, c, 'nova:stop');
@@ -89,12 +127,14 @@ class Provisioner {
     await startServer(api, c);
   }
 
+  /// Queues a world archive; the runner extracts it into the data folder, then
+  /// deletes the upload so the repository does not grow without bound.
   static Future<void> uploadWorldImport(GitHubApi api, ServerConfig c, Uint8List zipBytes) async {
     await _putBytes(api, c, 'nova-craft/import/world.zip', zipBytes, 'nova: import world');
   }
 
   static Future<void> writePlayitSecret(GitHubApi api, ServerConfig c, String secret) {
-    return api.putSecret(c.repoOwner, c.repoName, 'PLAYIT_SECRET_KEY', secret);
+    return api.putSecret(c.repoOwner, c.repoName, 'PLAYIT_SECRET_KEY', secret.trim());
   }
 
   static Future<List<ServerConfig>> discoverServers(GitHubApi api) async {

@@ -8,7 +8,8 @@ import 'core/strings.dart';
 import 'design/theme.dart';
 import 'design/tokens.dart';
 import 'features/auth/auth_screen.dart';
-import 'features/onboarding/onboarding_screen.dart';
+import 'features/onboarding/playit_setup_screen.dart';
+import 'features/servers/create_server_screen.dart';
 import 'features/shell/app_shell.dart';
 import 'features/splash/splash_screen.dart';
 import 'state/app_state.dart';
@@ -100,7 +101,11 @@ class _NovaCraftAppState extends State<NovaCraftApp> {
   }
 }
 
-/// Decides between splash, onboarding, sign-in and the main shell.
+/// Decides between splash, sign-in, Playit preparation, first-server creation
+/// and the main shell.
+///
+/// The navigation shell is intentionally unreachable until a real server
+/// exists, so the app never opens on empty, meaningless tabs.
 class RootGate extends StatefulWidget {
   const RootGate({super.key});
 
@@ -132,11 +137,17 @@ class _RootGateState extends State<RootGate> {
     if (state.booting || !state.sessionReady || !_splashElapsed) {
       return const SplashScreen();
     }
-    if (!state.onboarded) {
-      return const OnboardingScreen();
-    }
     if (!state.signedIn) {
       return const AuthScreen(showBack: false);
+    }
+    if (state.loadingServers && state.servers.isEmpty) {
+      return const SplashScreen();
+    }
+    if (!state.playitPrepared && !state.playitSkipped) {
+      return PlayitSetupScreen(onDone: () => setState(() {}));
+    }
+    if (state.servers.isEmpty) {
+      return const CreateServerScreen();
     }
     return const AppShell();
   }

@@ -520,8 +520,10 @@ class _ConsolePlaceholder extends StatelessWidget {
       text = L10n.t('consoleNoRun');
     } else if (monitor.runActive) {
       text = L10n.t('consoleRunActive');
+    } else if (monitor.liveLog == null) {
+      text = monitor.logsError ?? L10n.t('consoleStopped');
     } else {
-      text = monitor.logsError ?? L10n.t('consoleRunCompleted');
+      text = L10n.t('consoleRunCompleted');
     }
     return Center(
       child: Padding(
@@ -545,7 +547,7 @@ class _ConsolePlaceholder extends StatelessWidget {
               spacing: 8,
               children: <Widget>[
                 _hint(L10n.t('consoleSourceSteps')),
-                _hint(L10n.t('consolePolling')),
+                _hint(L10n.t('consoleSource')),
               ],
             ),
           ],

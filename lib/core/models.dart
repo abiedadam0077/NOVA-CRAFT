@@ -292,7 +292,9 @@ class PingResult {
   static const PingResult unknown = PingResult(online: false, latencyMs: 0, error: 'not-probed');
 }
 
-/// Mirrors `nova-craft/server.json` exactly (keys, defaults and semantics).
+/// Mirrors `nova-craft/server.json`. New in the Flutter rewrite:
+/// `eulaAccepted` (an explicit choice), `dataPath` (the runner-side folder that
+/// actually holds the server data) and the resolved `playit` tunnel details.
 class ServerConfig {
   const ServerConfig({
     required this.id,
@@ -300,6 +302,7 @@ class ServerConfig {
     required this.repoOwner,
     required this.repoName,
     this.repoPrivate = true,
+    this.defaultBranch = 'main',
     this.edition = 'JAVA',
     this.mcVersion = '',
     this.software = 'VANILLA',
@@ -320,9 +323,13 @@ class ServerConfig {
     this.playitAddress = '',
     this.playitJavaPort = 25565,
     this.playitBedrockPort = 19132,
+    this.playitTunnelName = '',
     this.autoRestart = true,
     this.createdAt = '',
     this.allowCommands = true,
+    this.eulaAccepted = false,
+    this.dataPath = 'server',
+    this.ownerLogin = '',
   });
 
   final String id;
@@ -330,9 +337,10 @@ class ServerConfig {
   final String repoOwner;
   final String repoName;
   final bool repoPrivate;
+  final String defaultBranch;
   final String edition; // JAVA | BEDROCK
   final String mcVersion;
-  final String software; // VANILLA PAPER PURPUR SPIGOT FABRIC FORGE NEOFORGE BDS
+  final String software; // VANILLA PAPER PURPUR FABRIC BDS
   final String downloadUrl;
   final String downloadSha;
   final int javaMajor;
@@ -350,23 +358,43 @@ class ServerConfig {
   final String playitAddress;
   final int playitJavaPort;
   final int playitBedrockPort;
+  final String playitTunnelName;
   final bool autoRestart;
   final String createdAt;
   final bool allowCommands;
+  final bool eulaAccepted;
+  final String dataPath;
+  final String ownerLogin;
 
   String get repoFull => '$repoOwner/$repoName';
   int get localPort => edition == 'BEDROCK' ? 19132 : 25565;
   bool get isJava => edition == 'JAVA';
   bool get isBedrock => edition == 'BEDROCK';
   bool get supportsPlugins => !isBedrock && (software == 'PAPER' || software == 'PURPUR' || software == 'SPIGOT');
-  bool get supportsMods => !isBedrock && (software == 'FABRIC' || software == 'FORGE' || software == 'NEOFORGE');
+  bool get supportsMods => !isBedrock && software == 'FABRIC';
   String get modsFolder {
-    if (isBedrock) return 'server/behavior_packs';
-    if (supportsMods) return 'server/mods';
-    if (supportsPlugins) return 'server/plugins';
+    if (isBedrock) return 'behavior_packs';
+    if (supportsMods) return 'mods';
+    if (supportsPlugins) return 'plugins';
     return '';
   }
 
+  /// Human readable Minecraft edition / software line.
+  String get softwareLabel {
+    if (isBedrock) return 'Bedrock Dedicated Server';
+    switch (software) {
+      case 'PAPER':
+        return 'Paper';
+      case 'PURPUR':
+        return 'Purpur';
+      case 'FABRIC':
+        return 'Fabric';
+      default:
+        return 'Vanilla';
+    }
+  }
+
+  /// Clean `host:port` used for pinging and copying.
   String get connectionHostPort {
     final raw = playitAddress.trim();
     if (raw.isEmpty) return '';
@@ -376,12 +404,23 @@ class ServerConfig {
         .trim();
   }
 
+  /// Root of the server data inside the repository. Everything the app calls a
+  /// "server file" is resolved under this prefix so repository files can never
+  /// be shown as Minecraft files.
+  String get serverRoot => dataPath.trim().isEmpty ? 'server' : dataPath.trim().replaceAll(RegExp(r'/+$'), '');
+
+  String serverPath(String relative) {
+    final clean = relative.replaceAll(RegExp(r'^/+'), '');
+    return clean.isEmpty ? serverRoot : '$serverRoot/$clean';
+  }
+
   ServerConfig copyWith({
     String? id,
     String? name,
     String? repoOwner,
     String? repoName,
     bool? repoPrivate,
+    String? defaultBranch,
     String? edition,
     String? mcVersion,
     String? software,
@@ -402,9 +441,13 @@ class ServerConfig {
     String? playitAddress,
     int? playitJavaPort,
     int? playitBedrockPort,
+    String? playitTunnelName,
     bool? autoRestart,
     String? createdAt,
     bool? allowCommands,
+    bool? eulaAccepted,
+    String? dataPath,
+    String? ownerLogin,
   }) {
     return ServerConfig(
       id: id ?? this.id,
@@ -412,6 +455,7 @@ class ServerConfig {
       repoOwner: repoOwner ?? this.repoOwner,
       repoName: repoName ?? this.repoName,
       repoPrivate: repoPrivate ?? this.repoPrivate,
+      defaultBranch: defaultBranch ?? this.defaultBranch,
       edition: edition ?? this.edition,
       mcVersion: mcVersion ?? this.mcVersion,
       software: software ?? this.software,
@@ -432,18 +476,24 @@ class ServerConfig {
       playitAddress: playitAddress ?? this.playitAddress,
       playitJavaPort: playitJavaPort ?? this.playitJavaPort,
       playitBedrockPort: playitBedrockPort ?? this.playitBedrockPort,
+      playitTunnelName: playitTunnelName ?? this.playitTunnelName,
       autoRestart: autoRestart ?? this.autoRestart,
       createdAt: createdAt ?? this.createdAt,
       allowCommands: allowCommands ?? this.allowCommands,
+      eulaAccepted: eulaAccepted ?? this.eulaAccepted,
+      dataPath: dataPath ?? this.dataPath,
+      ownerLogin: ownerLogin ?? this.ownerLogin,
     );
   }
 
   Map<String, dynamic> toJson() => <String, dynamic>{
+        'schema': 2,
         'id': id,
         'name': name,
         'repoOwner': repoOwner,
         'repoName': repoName,
         'repoPrivate': repoPrivate,
+        'defaultBranch': defaultBranch,
         'edition': edition,
         'mcVersion': mcVersion,
         'software': software,
@@ -464,9 +514,13 @@ class ServerConfig {
         'playitAddress': playitAddress,
         'playitJavaPort': playitJavaPort,
         'playitBedrockPort': playitBedrockPort,
+        'playitTunnelName': playitTunnelName,
         'autoRestart': autoRestart,
         'createdAt': createdAt,
         'allowCommands': allowCommands,
+        'eulaAccepted': eulaAccepted,
+        'dataPath': dataPath,
+        'ownerLogin': ownerLogin,
       };
 
   factory ServerConfig.fromJson(Map<String, dynamic> o) {
@@ -488,15 +542,20 @@ class ServerConfig {
       return v.toString().toLowerCase() == 'true';
     }
 
+    // Repositories created before the rewrite only ever had `eula=true` written
+    // into server/eula.txt, so treat a missing flag as accepted for them.
+    final bool hasFlag = o.containsKey('eulaAccepted');
+    final String software = str('software', 'VANILLA').toUpperCase();
     return ServerConfig(
       id: str('id'),
       name: str('name'),
       repoOwner: str('repoOwner'),
       repoName: str('repoName'),
       repoPrivate: boolean('repoPrivate', true),
-      edition: str('edition', 'JAVA'),
+      defaultBranch: str('defaultBranch', 'main'),
+      edition: str('edition', 'JAVA').toUpperCase(),
       mcVersion: str('mcVersion'),
-      software: str('software', 'VANILLA'),
+      software: software,
       downloadUrl: str('downloadUrl'),
       downloadSha: str('downloadSha'),
       javaMajor: integer('javaMajor', 21),
@@ -514,9 +573,98 @@ class ServerConfig {
       playitAddress: str('playitAddress'),
       playitJavaPort: integer('playitJavaPort', 25565),
       playitBedrockPort: integer('playitBedrockPort', 19132),
+      playitTunnelName: str('playitTunnelName'),
       autoRestart: boolean('autoRestart', true),
       createdAt: str('createdAt'),
       allowCommands: boolean('allowCommands', true),
+      eulaAccepted: hasFlag ? boolean('eulaAccepted', false) : str('edition', 'JAVA').toUpperCase() != 'BEDROCK',
+      dataPath: str('dataPath', 'server'),
+      ownerLogin: str('ownerLogin'),
+    );
+  }
+}
+
+/// Runtime snapshot written by the runner to `nova-craft/status.json`. This is
+/// what lets the app show the *real* server state instead of guessing it from
+/// the workflow status.
+class ServerRuntime {
+  const ServerRuntime({
+    this.phase = 'unknown',
+    this.ready = false,
+    this.serverPid,
+    this.playersOnline,
+    this.playersMax,
+    this.version,
+    this.motd = '',
+    this.latencyMs,
+    this.tunnelStatus = '',
+    this.tunnelMessage = '',
+    this.tunnelAddress = '',
+    this.updatedAt = '',
+    this.conclusion = '',
+    this.reason = '',
+    this.cycleStartedAt = '',
+    this.gamePort,
+    this.rssMb,
+  });
+
+  final String phase; // starting | ready | stopping | stopped | failed | unknown
+  final bool ready;
+  final int? serverPid;
+  final int? playersOnline;
+  final int? playersMax;
+  final String version;
+  final String motd;
+  final int? latencyMs;
+  final String tunnelStatus; // connected | connecting | missing | error | unknown
+  final String tunnelMessage;
+  /// Public `host:port` the Playit agent reported. Empty until the agent has
+  /// actually been assigned a tunnel — never synthesised.
+  final String tunnelAddress;
+  final String updatedAt;
+  final String conclusion;
+  final String reason;
+  final String cycleStartedAt;
+  final int? gamePort;
+  final int? rssMb;
+
+  DateTime? get updatedAtDate => DateTime.tryParse(updatedAt)?.toLocal();
+
+  bool get online => ready && phase == 'ready';
+  bool get tunnelConnected => tunnelStatus == 'connected';
+
+  Duration? get uptime {
+    final DateTime? start = DateTime.tryParse(cycleStartedAt);
+    if (start == null || !online) return null;
+    final Duration value = DateTime.now().difference(start.toLocal());
+    return value.isNegative ? null : value;
+  }
+
+  factory ServerRuntime.fromJson(Map<String, dynamic> o) {
+    int? numOrNull(String key) {
+      final v = o[key];
+      if (v is num) return v.toInt();
+      return int.tryParse(v?.toString() ?? '');
+    }
+
+    return ServerRuntime(
+      phase: o['phase']?.toString() ?? 'unknown',
+      ready: o['ready'] == true,
+      serverPid: numOrNull('serverPid'),
+      playersOnline: numOrNull('playersOnline'),
+      playersMax: numOrNull('playersMax'),
+      version: o['version']?.toString() ?? '',
+      motd: o['motd']?.toString() ?? '',
+      latencyMs: numOrNull('latencyMs'),
+      tunnelStatus: o['tunnelStatus']?.toString() ?? '',
+      tunnelMessage: o['tunnelMessage']?.toString() ?? '',
+      tunnelAddress: o['tunnelAddress']?.toString() ?? '',
+      updatedAt: o['updatedAt']?.toString() ?? '',
+      conclusion: o['conclusion']?.toString() ?? '',
+      reason: o['reason']?.toString() ?? '',
+      cycleStartedAt: o['cycleStartedAt']?.toString() ?? '',
+      gamePort: numOrNull('gamePort'),
+      rssMb: numOrNull('rssMb'),
     );
   }
 }

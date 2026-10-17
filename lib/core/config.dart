@@ -17,6 +17,7 @@ class AppConfig {
   static const String deviceVerificationUrl = 'https://github.com/login/device';
 
   static const String playitDashboard = 'https://playit.gg/account/tunnels';
+  static const String playitAgentUrl = 'https://playit.gg/account/agents/new-docker';
   static const String playitAgentDocs = 'https://playit.gg/download';
   static const String modrinthApi = 'https://api.modrinth.com/v2';
 

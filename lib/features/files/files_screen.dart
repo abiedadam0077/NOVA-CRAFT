@@ -37,7 +37,7 @@ class FilesScreen extends StatelessWidget {
           title: L10n.t('noServerSelected'),
           body: L10n.t('emptyFilesTitle'),
           icon: Icons.folder_copy_rounded,
-          actionLabel: L10n.t('navServers'),
+          actionLabel: L10n.t('homeServerSwitcher'),
           onAction: onPickServer,
           artAsset: 'assets/images/art_island.jpg',
         ),
@@ -84,8 +84,15 @@ class _FileBrowserState extends State<FileBrowser> {
   @override
   void initState() {
     super.initState();
+    // The browser is rooted at the server data folder. Repository files can
+    // never be listed, opened or written through this screen.
+    _path = widget.config.serverRoot;
     WidgetsBinding.instance.addPostFrameCallback((_) => _init());
   }
+
+  String get _root => widget.config.serverRoot;
+
+  bool _insideRoot(String path) => path == _root || path.startsWith('$_root/');
 
   @override
   void didUpdateWidget(FileBrowser oldWidget) {
@@ -161,6 +168,10 @@ class _FileBrowserState extends State<FileBrowser> {
   }
 
   void _navigate(String path) {
+    if (!_insideRoot(path)) {
+      showNovaToast(context, L10n.t('pathOutsideRoot'), kind: ToastKind.error);
+      return;
+    }
     setState(() => _path = path);
     _load();
   }
@@ -184,9 +195,13 @@ class _FileBrowserState extends State<FileBrowser> {
     return out;
   }
 
-  List<String> get _breadcrumbs => _path.isEmpty ? <String>[] : _path.split('/');
+  List<String> get _breadcrumbs {
+    if (_path == _root) return <String>[];
+    final String relative = _path.substring((_root.length + 1).clamp(0, _path.length));
+    return relative.isEmpty ? <String>[] : relative.split('/');
+  }
 
-  String _pathUpTo(int index) => _breadcrumbs.take(index + 1).join('/');
+  String _pathUpTo(int index) => '$_root/${_breadcrumbs.take(index + 1).join('/')}';
 
   String _iconFor(String name) {
     final int dot = name.lastIndexOf('.');
@@ -344,7 +359,7 @@ class _FileBrowserState extends State<FileBrowser> {
       showNovaToast(context, L10n.t('fileTooLarge'), kind: ToastKind.error);
       return;
     }
-    final String target = _path.isEmpty ? file.name : '$_path/${file.name}';
+    final String target = '$_path/${file.name}';
     setState(() => _busyPath = target);
     try {
       final AppState state = AppScope.read(context);
@@ -394,9 +409,7 @@ class _FileBrowserState extends State<FileBrowser> {
     );
     final String name = _newName.text.trim();
     if (ok != true || name.isEmpty || !mounted) return;
-    final String target = folder
-        ? (_path.isEmpty ? '$name/.gitkeep' : '$_path/$name/.gitkeep')
-        : (_path.isEmpty ? name : '$_path/$name');
+    final String target = folder ? '$_path/$name/.gitkeep' : '$_path/$name';
     setState(() => _busyPath = target);
     try {
       final AppState state = AppScope.read(context);
@@ -567,15 +580,23 @@ class _FileBrowserState extends State<FileBrowser> {
           _Breadcrumbs(
             repo: widget.config.repoName,
             segments: _breadcrumbs,
-            onRoot: () => _navigate(''),
+            onRoot: () => _navigate(widget.config.serverRoot),
             onSegment: (int i) => _navigate(_pathUpTo(i)),
           ),
           const SizedBox(height: 10),
           NovaSearchField(
             controller: _search,
-            hint: L10n.t('search'),
+            hint: L10n.t('searchFiles'),
             onChanged: (_) => setState(() {}),
             onClear: () => setState(() => _search.clear()),
+          ),
+          const SizedBox(height: 6),
+          Row(
+            children: <Widget>[
+              Icon(Icons.info_outline_rounded, size: 12, color: p.textDim),
+              const SizedBox(width: 6),
+              Expanded(child: Text(L10n.t('serverDataOnly'), style: NovaTextStyles.caption(p.textDim))),
+            ],
           ),
           const SizedBox(height: 8),
           Row(
@@ -692,7 +713,7 @@ class _FileBrowserState extends State<FileBrowser> {
               const SizedBox(width: 6),
               Expanded(
                 child: Text(
-                  '${L10n.t('pathBreadcrumb')}: ${_path.isEmpty ? '/' : '/$_path'}',
+                  '${L10n.t('pathBreadcrumb')}: /${_breadcrumbs.join('/')}',
                   style: NovaTextStyles.caption(p.textDim),
                 ),
               ),

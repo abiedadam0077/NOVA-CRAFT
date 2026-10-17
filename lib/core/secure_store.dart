@@ -24,6 +24,8 @@ class SecureStore {
   static const String _notifyBackupsKey = 'nova_notify_backups';
   static const String _notifyFailuresKey = 'nova_notify_failures';
   static const String _lastServerKey = 'nova_last_server';
+  static const String _playitKey = 'playit_agent_secret_enc';
+  static const String _playitPreparedKey = 'nova_playit_prepared';
 
   Future<void> init() async {
     _prefs ??= await SharedPreferences.getInstance();
@@ -94,6 +96,35 @@ class SecureStore {
     await _p.remove(_expiresKey);
   }
 
+  // ---------------------------------------------------------------- playit
+  /// The Playit agent secret never leaves the device unencrypted and is never
+  /// rendered. It is only installed into a repository as an Actions secret.
+  Future<void> savePlayitSecret(String value) async {
+    await _secure.write(key: _playitKey, value: value.trim());
+    await _p.setBool(_playitPreparedKey, true);
+  }
+
+  Future<String?> playitSecret() async {
+    try {
+      final String? value = await _secure.read(key: _playitKey);
+      if (value == null || value.trim().isEmpty) return null;
+      return value.trim();
+    } catch (_) {
+      return null;
+    }
+  }
+
+  bool get playitPrepared => _p.getBool(_playitPreparedKey) ?? false;
+
+  Future<void> clearPlayitSecret() async {
+    try {
+      await _secure.delete(key: _playitKey);
+    } catch (_) {
+      // Nothing else to do; the flag below still hides the flow.
+    }
+    await _p.setBool(_playitPreparedKey, false);
+  }
+
   // ------------------------------------------------------------ preferences
   String get language => _p.getString(_langKey) ?? 'ar';
   Future<void> setLanguage(String value) => _p.setString(_langKey, value);
@@ -121,6 +152,7 @@ class SecureStore {
 
   Future<void> clearLocalData() async {
     await clearTokens();
+    await clearPlayitSecret();
     await _p.clear();
   }
 }

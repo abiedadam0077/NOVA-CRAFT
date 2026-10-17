@@ -81,7 +81,7 @@ class _ModsViewState extends State<ModsView> {
     }
   }
 
-  String get _folder => _tab == 0 ? 'server/mods' : 'server/plugins';
+  String get _folder => _tab == 0 ? '${widget.config.serverRoot}/mods' : '${widget.config.serverRoot}/plugins';
 
   String get _projectType => _tab == 0 ? 'mod' : 'plugin';
 
@@ -351,9 +351,29 @@ class _ModsViewState extends State<ModsView> {
 
   @override
   Widget build(BuildContext context) {
+    final p = context.nova;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.only(bottom: 10),
+          child: Row(
+            children: <Widget>[
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(L10n.t('navMods'), style: NovaTextStyles.heading(22, p.text)),
+                    Text(
+                      '${widget.config.softwareLabel} ${widget.config.mcVersion}',
+                      style: NovaTextStyles.caption(p.textDim),
+                    ),
+                  ],
+                ),
+              ),
+            ],
+          ),
+        ),
         NovaSegmented(
           labels: <String>[L10n.t('modsTab'), L10n.t('pluginsTab')],
           index: _tab,
@@ -385,9 +405,17 @@ class _ModsViewState extends State<ModsView> {
 
   Widget _unsupportedState() {
     final bool bedrock = widget.config.isBedrock;
+    final String body;
+    if (bedrock) {
+      body = L10n.t('modBedrockBody');
+    } else if (_tab == 1) {
+      body = L10n.t('pluginsOnly');
+    } else {
+      body = L10n.t('modsOnly');
+    }
     return EmptyState(
       title: bedrock ? L10n.t('modBedrockTitle') : L10n.t('modVanillaTitle'),
-      body: bedrock ? L10n.t('modBedrockBody') : L10n.t('modVanillaBody'),
+      body: body,
       icon: Icons.extension_off_rounded,
       compact: true,
     );

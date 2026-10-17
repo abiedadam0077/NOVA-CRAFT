@@ -17,10 +17,13 @@ import '../../design/widgets/inputs.dart';
 import '../../design/widgets/nav.dart';
 import '../../design/widgets/surfaces.dart';
 import '../../state/app_state.dart';
-import 'server_detail_screen.dart';
 
 class CreateServerScreen extends StatefulWidget {
-  const CreateServerScreen({super.key});
+  const CreateServerScreen({super.key, this.onCreated});
+
+  /// Called after the repository is provisioned. The route then pops back to
+  /// the root so the main shell (which requires a server) can take over.
+  final ValueChanged<ServerConfig>? onCreated;
 
   @override
   State<CreateServerScreen> createState() => _CreateServerScreenState();
@@ -30,7 +33,6 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
   final PageController _pages = PageController();
   final TextEditingController _name = TextEditingController();
   final TextEditingController _motd = TextEditingController(text: 'A NOVA CRAFT Server');
-  final TextEditingController _playit = TextEditingController();
   final TextEditingController _newRepo = TextEditingController();
 
   int _step = 0;
@@ -56,6 +58,7 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
   String _difficulty = 'normal';
   bool _startNow = true;
   bool _needsInstall = false;
+  bool _eula = false;
 
   bool _creating = false;
   String? _createError;
@@ -73,7 +76,6 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
     _pages.dispose();
     _name.dispose();
     _motd.dispose();
-    _playit.dispose();
     _newRepo.dispose();
     super.dispose();
   }
@@ -88,15 +90,26 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
       List<String> values;
       switch (_software) {
         case 'PAPER':
-          values = (await state.minecraft.paperVersions()).reversed.toList();
+          values = await state.minecraft.paperVersions();
           break;
         case 'PURPUR':
-          values = (await state.minecraft.purpurVersions()).reversed.toList();
+          values = await state.minecraft.purpurVersions();
           break;
         default:
           final List<McVersion> releases = await state.minecraft.javaReleases();
           values = releases.map((McVersion v) => v.id).toList();
       }
+      int compare(String a, String b) {
+        final List<int> pa = a.split('.').map((String x) => int.tryParse(x) ?? 0).toList();
+        final List<int> pb = b.split('.').map((String x) => int.tryParse(x) ?? 0).toList();
+        for (int i = 0; i < 3; i++) {
+          final int va = i < pa.length ? pa[i] : 0;
+          final int vb = i < pb.length ? pb[i] : 0;
+          if (va != vb) return vb.compareTo(va);
+        }
+        return 0;
+      }
+      values.sort(compare);
       if (!mounted) return;
       setState(() {
         _versions = values;
@@ -207,7 +220,8 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
       simulationDistance: _viewDistance,
       motd: _motd.text.trim().isEmpty ? 'A NOVA CRAFT Server' : _motd.text.trim(),
       memoryMb: _memoryMb,
-      playitAddress: _playit.text.trim(),
+      playitAddress: '',
+      eulaAccepted: _eula && _edition == 'JAVA',
       createdAt: DateTime.now().toUtc().toIso8601String(),
     );
   }
@@ -284,6 +298,10 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
       );
       await Provisioner.writeServerFiles(state.api, config, null);
       _doneSteps = <String>[..._doneSteps, 'files'];
+
+      setState(() => _progress = L10n.t('provisioningPlayit'));
+      final bool secretInstalled = await state.installPlayitSecret(config);
+      if (secretInstalled) _doneSteps = <String>[..._doneSteps, 'playit'];
       setState(() => _progress = L10n.t('provisioningDispatch'));
 
       if (_startNow) {
@@ -305,9 +323,8 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
         cancelLabel: L10n.t('close'),
       );
       if (!mounted) return;
-      Navigator.of(context).pushReplacement(MaterialPageRoute<void>(
-        builder: (_) => ServerDetailScreen(config: config),
-      ));
+      widget.onCreated?.call(config);
+      Navigator.of(context).popUntil((Route<dynamic> route) => route.isFirst);
     } catch (error) {
       if (!mounted) {
         return;
@@ -705,12 +722,19 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
           ],
         ),
         const SizedBox(height: 14),
-        NovaField(
-          label: L10n.t('serverAddress'),
-          hint: 'your-tunnel.playit.gg',
-          controller: _playit,
-          prefixIcon: Icons.hub_rounded,
-          helper: L10n.t('addressFromConfig'),
+        InfoBanner(
+          title: L10n.t('homeConnection'),
+          body: L10n.t('homeNoAddress'),
+          icon: Icons.hub_rounded,
+          color: p.primaryBright,
+        ),
+        const SizedBox(height: 10),
+        NovaSwitchTile(
+          title: L10n.t('eulaAcceptLabel'),
+          subtitle: L10n.t('eulaSectionBody'),
+          value: _eula,
+          icon: Icons.gavel_rounded,
+          onChanged: (bool v) => setState(() => _eula = v),
         ),
       ],
       title: L10n.t('stepSettings'),
@@ -810,8 +834,7 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
               InfoRow(label: L10n.t('difficulty'), value: L10n.t(_difficulty)),
               InfoRow(
                 label: L10n.t('serverAddress'),
-                value: _playit.text.trim().isEmpty ? L10n.t('noAddressYet') : _playit.text.trim(),
-                monospace: true,
+                value: L10n.t('noAddressYet'),
               ),
             ],
           ),

@@ -29,7 +29,8 @@ class ServerMonitor extends ChangeNotifier {
     if (value.repoFull != _config.repoFull) {
       run = null;
       jobs = <WorkflowJob>[];
-      heartbeat = null;
+      runtime = null;
+      liveLog = null;
       ping = null;
       logs = null;
       logsRunId = null;
@@ -41,8 +42,14 @@ class ServerMonitor extends ChangeNotifier {
   WorkflowRun? run;
   List<WorkflowRun> recentRuns = <WorkflowRun>[];
   List<WorkflowJob> jobs = <WorkflowJob>[];
-  RunnerHeartbeat? heartbeat;
+  ServerRuntime? runtime;
   PingResult? ping;
+
+  /// The real log tail that the runner publishes while the server is up.
+  String? liveLog;
+  DateTime? liveLogAt;
+
+  /// GitHub's full step log, only available once a run has finished.
   String? logs;
   int? logsRunId;
 
@@ -104,7 +111,8 @@ class ServerMonitor extends ChangeNotifier {
           jobs = <WorkflowJob>[];
         }
       }
-      heartbeat = await _loadHeartbeat();
+      runtime = await _loadRuntime();
+      if (runActive) await _loadLiveLog();
       if (withPing) ping = await _ping();
       error = null;
       if (stopRequested && ping?.online != true) stopRequested = false;
@@ -118,15 +126,35 @@ class ServerMonitor extends ChangeNotifier {
     }
   }
 
-  Future<RunnerHeartbeat?> _loadHeartbeat() async {
+  Future<ServerRuntime?> _loadRuntime() async {
     try {
       final String text = await api.getFileText(_config.repoOwner, _config.repoName, Provisioner.statusPath);
       final dynamic decoded = jsonDecode(text);
-      if (decoded is Map) return RunnerHeartbeat.fromJson(Map<String, dynamic>.from(decoded));
+      if (decoded is Map) {
+        final ServerRuntime value = ServerRuntime.fromJson(Map<String, dynamic>.from(decoded));
+        // A stale heartbeat from a previous cycle must not look live.
+        final DateTime? at = value.updatedAtDate;
+        if (at != null && DateTime.now().difference(at).inMinutes > 15) {
+          return value.phase == 'ready' ? value : value;
+        }
+        return value;
+      }
     } catch (_) {
       return null;
     }
     return null;
+  }
+
+  Future<void> _loadLiveLog() async {
+    try {
+      final String text = await api.getFileText(_config.repoOwner, _config.repoName, Provisioner.liveLogPath);
+      if (text.trim().isNotEmpty) {
+        liveLog = text;
+        liveLogAt = DateTime.now();
+      }
+    } catch (_) {
+      // 404 until the runner publishes its first tail.
+    }
   }
 
   Future<PingResult?> _ping() async {
@@ -153,7 +181,7 @@ class ServerMonitor extends ChangeNotifier {
         logs = await api.downloadRunLogs(_config.repoOwner, _config.repoName, current.id);
         logsRunId = current.id;
       } else {
-        logs = null;
+        await _loadLiveLog();
       }
     } catch (err) {
       logsError = Fmt.error(err);
@@ -166,15 +194,41 @@ class ServerMonitor extends ChangeNotifier {
   bool get runActive => run?.isActive ?? false;
 
   bool get heartbeatFresh {
-    final DateTime? updated = heartbeat?.updatedAtDate;
+    final DateTime? updated = runtime?.updatedAtDate;
     if (updated == null) return false;
     return DateTime.now().difference(updated).inMinutes < 20;
   }
 
+  /// Backwards-compatible view used by older screens.
+  RunnerHeartbeat? get heartbeat {
+    final ServerRuntime? value = runtime;
+    if (value == null) return null;
+    return RunnerHeartbeat(
+      serverId: _config.id,
+      updatedAt: value.updatedAt,
+      serverProcessRssKb: (value.rssMb ?? 0) * 1024,
+      runnerFreeMb: 0,
+      raw: <String, dynamic>{},
+    );
+  }
+
+  /// True only when the runner itself says the world is loaded and accepting
+  /// players *and* that report is recent. Workflow status alone is never
+  /// treated as "online".
+  bool get runtimeFresh {
+    final ServerRuntime? value = runtime;
+    if (value == null) return false;
+    final DateTime? at = value.updatedAtDate;
+    if (at == null) return false;
+    return DateTime.now().difference(at).inMinutes < 6;
+  }
+
   ServerPhase get phase {
     final bool pingOnline = ping?.online ?? false;
-    if (stopRequested && (pingOnline || runActive)) return ServerPhase.stopping;
+    if (stopRequested) return ServerPhase.stopping;
     if (pingOnline) return ServerPhase.online;
+    if (runtimeFresh && (runtime?.ready ?? false) && tunnelConnected) return ServerPhase.online;
+    if (runtimeFresh && (runtime?.ready ?? false)) return ServerPhase.starting;
     if (runActive) return ServerPhase.starting;
     if (run != null && run!.isCompleted && (run!.conclusion == 'failure' || run!.conclusion == 'timed_out')) {
       return ServerPhase.error;
@@ -183,8 +237,28 @@ class ServerMonitor extends ChangeNotifier {
     return ServerPhase.offline;
   }
 
-  int? get playersOnline => (ping?.online ?? false) ? ping?.playersOnline : null;
-  int? get playersMax => (ping?.online ?? false) ? (ping?.playersMax ?? _config.maxPlayers) : _config.maxPlayers;
+  bool get tunnelConnected => runtimeFresh && (runtime?.tunnelConnected ?? false);
+
+  /// Configured address first, then the address the agent actually reported.
+  String get address {
+    final String configured = _config.connectionHostPort;
+    if (configured.isNotEmpty) return configured;
+    final String reported = runtime?.tunnelAddress ?? '';
+    return reported.replaceFirst('tcp://', '').replaceFirst('udp://', '').trim();
+  }
+
+  int? get playersOnline {
+    if (ping?.online ?? false) return ping?.playersOnline;
+    if (runtimeFresh && (runtime?.ready ?? false)) return runtime?.playersOnline;
+    return null;
+  }
+
+  int? get playersMax {
+    if (ping?.online ?? false) return ping?.playersMax ?? _config.maxPlayers;
+    if (runtimeFresh && (runtime?.ready ?? false)) return runtime?.playersMax ?? _config.maxPlayers;
+    return _config.maxPlayers;
+  }
+
   int? get latencyMs => (ping?.online ?? false) ? ping?.latencyMs : null;
 
   /// Process RSS reported by the runner heartbeat. This is not total machine RAM.
@@ -194,16 +268,25 @@ class ServerMonitor extends ChangeNotifier {
   double? get cpuFraction => null;
 
   Duration? get uptime {
+    if (phase != ServerPhase.online) return null;
+    final Duration? runtimeUptime = runtime?.uptime;
+    if (runtimeUptime != null) return runtimeUptime;
     final DateTime? started = run?.startedAtDate;
     if (started == null) return null;
-    if (!runActive && !heartbeatFresh) return null;
     final Duration value = DateTime.now().difference(started);
     return value.isNegative ? null : value;
   }
 
+  /// Console contents: the real server log tail while a cycle runs, then the
+  /// archived GitHub log once the run ends. Falls back to the step tree so the
+  /// screen is never blank during download/setup phases.
   List<LogEntry> buildLogEntries() {
-    if (runActive) return LogParser.fromJobs(jobs);
-    if (logs != null && logs!.isNotEmpty) return LogParser.fromText(logs!, source: 'logs');
+    if (liveLog != null && liveLog!.trim().isNotEmpty) {
+      return LogParser.fromText(liveLog!, source: 'live');
+    }
+    if (!runActive && logs != null && logs!.isNotEmpty) {
+      return LogParser.fromText(logs!, source: 'logs');
+    }
     return LogParser.fromJobs(jobs);
   }
 

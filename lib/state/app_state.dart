@@ -44,6 +44,14 @@ class AppState extends ChangeNotifier {
   bool notifyBackups = true;
   bool notifyFailures = true;
 
+  /// True once a Playit agent secret has been stored on this device. The value
+  /// itself is never cached in memory beyond the write call.
+  bool playitPrepared = false;
+
+  /// Set only when the user explicitly continues without Playit. It is never
+  /// persisted, so the next launch asks again.
+  bool playitSkipped = false;
+
   bool get signedIn => user != null;
   bool get isArabic => language == 'ar';
 
@@ -55,6 +63,7 @@ class AppState extends ChangeNotifier {
       onboarded = store.onboarded;
       notifyBackups = store.notifyBackups;
       notifyFailures = store.notifyFailures;
+      playitPrepared = store.playitPrepared && (await store.playitSecret()) != null;
       L10n.lang = language;
       await _restoreSession();
     } catch (error) {
@@ -186,6 +195,40 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  /// First-run gate: the navigation shell only exists once a server is known.
+  bool get hasServer => servers.isNotEmpty;
+
+  /// Stores the Playit agent secret encrypted on the device. It is installed
+  /// into a repository secret at creation time or from the network settings.
+  Future<void> savePlayitSecret(String secret) async {
+    await store.savePlayitSecret(secret);
+    playitPrepared = true;
+    notifyListeners();
+  }
+
+  void skipPlayitForNow() {
+    playitSkipped = true;
+    notifyListeners();
+  }
+
+  Future<void> forgetPlayitSecret() async {
+    await store.clearPlayitSecret();
+    playitPrepared = false;
+    notifyListeners();
+  }
+
+  /// Writes the stored secret into the server repository as an Actions secret.
+  /// Returns false when nothing was stored, so callers can ask for it.
+  Future<bool> installPlayitSecret(ServerConfig config, {String? provided}) async {
+    final String? secret = provided ?? await store.playitSecret();
+    if (secret == null || secret.isEmpty) return false;
+    await Provisioner.writePlayitSecret(api, config, secret);
+    if (provided != null) await store.savePlayitSecret(provided);
+    playitPrepared = true;
+    notifyListeners();
+    return true;
+  }
+
   ServerConfig? serverByRepo(String owner, String repo) {
     for (final ServerConfig s in servers) {
       if (s.repoOwner == owner && s.repoName == repo) return s;
@@ -242,6 +285,7 @@ class AppState extends ChangeNotifier {
       L10n.lang = 'ar';
       notifyBackups = true;
       notifyFailures = true;
+      await forgetPlayitSecret();
     }
     notifyListeners();
   }
