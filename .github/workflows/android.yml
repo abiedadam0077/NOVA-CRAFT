@@ -3,6 +3,7 @@ name: Android Build
 on:
   push:
     branches: ["arena/484b1c20-nova-craft", "main"]
+    paths-ignore: ["README.md", "docs/**", ".github/workflows/publish-tested-apk.yml"]
   workflow_dispatch:
 
 permissions:
@@ -85,6 +86,7 @@ jobs:
             delivery/
             app/build/reports/
             app/build/outputs/androidTest-results/
+            app/build/test-results/
           if-no-files-found: error
           retention-days: 30
       - name: Publish directly downloadable APK only after tests pass
@@ -95,7 +97,8 @@ jobs:
           exec > >(tee /tmp/publication.log) 2>&1
           python3 .github/scripts/delivery-report.py
           TAG="apk-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
-          gh release create "$TAG" delivery/* --target "$GITHUB_SHA" --prerelease --title "NOVA CRAFT 1.0.0 ($BUILD_KIND, tested APK)" --notes-file delivery/TEST-REPORT.md
+          mapfile -d '' FILES < <(find delivery -maxdepth 1 -type f -size +0c -print0)
+          gh release create "$TAG" "${FILES[@]}" --target "$GITHUB_SHA" --prerelease --title "NOVA CRAFT 1.0.0 ($BUILD_KIND, tested APK)" --notes-file delivery/TEST-REPORT.md
           # Verify the published binary can actually be downloaded and matches the tested APK.
           mkdir -p "$RUNNER_TEMP/download-check"
           gh release download "$TAG" --pattern '*.apk' --dir "$RUNNER_TEMP/download-check"
