@@ -44,10 +44,30 @@ jobs:
         run: flutter pub get
 
       - name: Static analysis
-        run: flutter analyze
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          flutter analyze 2>&1 | tee /tmp/analyze.log
+          STATUS=${PIPESTATUS[0]}
+          if [ "$STATUS" -ne 0 ]; then
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -f body="$(tail -c 55000 /tmp/analyze.log || true)" || true
+            exit "$STATUS"
+          fi
 
       - name: Unit and widget tests
-        run: flutter test --reporter expanded
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          flutter test --reporter expanded 2>&1 | tee /tmp/test.log
+          STATUS=${PIPESTATUS[0]}
+          if [ "$STATUS" -ne 0 ]; then
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -f body="$(tail -c 55000 /tmp/test.log || true)" || true
+            exit "$STATUS"
+          fi
 
       - name: Build APK
         env:
@@ -61,13 +81,13 @@ jobs:
           mkdir -p delivery
           if [ -n "${NOVA_KEYSTORE_BASE64:-}" ] && [ -n "${NOVA_KEYSTORE_PASSWORD:-}" ]; then
             printf '%s' "$NOVA_KEYSTORE_BASE64" | base64 --decode > "$NOVA_KEYSTORE_PATH"
-            flutter build apk --release --no-shrink
+            flutter build apk --release --no-shrink 2>&1 | tee /tmp/build.log
             cp build/app/outputs/flutter-apk/app-release.apk delivery/NOVA-CRAFT-1.0.0-release.apk
             echo "BUILD_KIND=release" >> "$GITHUB_ENV"
           else
             echo "Release keystore secrets are unavailable in this repository."
             echo "Delivering an explicitly labelled debug-signed APK; no new release key is generated."
-            flutter build apk --debug
+            flutter build apk --debug 2>&1 | tee /tmp/build.log
             cp build/app/outputs/flutter-apk/app-debug.apk delivery/NOVA-CRAFT-1.0.0-debug.apk
             echo "BUILD_KIND=debug" >> "$GITHUB_ENV"
           fi
@@ -132,5 +152,11 @@ jobs:
 
       - name: Diagnostic on failure
         if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
           echo "Build failed. Inspect the analyze/test output above." >> "$GITHUB_STEP_SUMMARY"
+          if [ -s /tmp/build.log ]; then
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -f body="$(tail -c 55000 /tmp/build.log || true)" || true
+          fi
