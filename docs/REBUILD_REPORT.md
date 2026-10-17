@@ -73,7 +73,14 @@
 ## 3. الاختبارات / Tests
 
 يُشغَّل على GitHub Actions: `flutter analyze` + `flutter test` (‏64 حالة اختبار في المصدر، ~70 عند التنفيذ) + بناء APK.
-آخر تشغيل ناجح: `flutter-apk-39038512806-1` (سيُحدَّث بعد آخر بناء).
+آخر تشغيل ناجح: run `39039028088` — `flutter analyze` نظيف، كل الاختبارات ناجحة، وAPK تم التحقق منه.
+
+### التحميل المباشر
+- arm64 (موصى به، ~24.8MB):
+  <https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39039028088-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk>
+- Universal (~60MB):
+  <https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39039028088-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk>
+- التحقق: <https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39039028088-1/SHA256SUMS.txt>
 
 | ما تمت تغطيته | النوع |
 |---|---|
