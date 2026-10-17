@@ -1,1 +1,2 @@
 trigger
+smoke 2026-10-17T20:27:42Z after startup fix
