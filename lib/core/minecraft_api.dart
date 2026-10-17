@@ -187,16 +187,35 @@ class MinecraftApi {
   }
 
   Future<ResolvedDownload> resolvePaper(String version) async {
-    final dynamic data = await _getJson('$_fillApi/projects/paper/versions/$version/builds');
-    if (data is! List || data.isEmpty) throw ApiException(404, 'Paper has no builds for $version');
     Map<String, dynamic>? chosen;
-    for (final dynamic raw in data) {
-      if (raw is! Map) continue;
-      final Map<String, dynamic> build = Map<String, dynamic>.from(raw);
-      final String channel = build['channel']?.toString().toUpperCase() ?? '';
-      if (channel == 'STABLE' || channel == 'RECOMMENDED') {
-        chosen = build;
-        break;
+    try {
+      final dynamic data = await _getJson('$_fillApi/projects/paper/versions/$version/builds');
+      final dynamic list = data is Map ? data['builds'] : data;
+      if (list is List) {
+        for (final dynamic raw in list) {
+          if (raw is! Map) continue;
+          final Map<String, dynamic> build = Map<String, dynamic>.from(raw);
+          final String channel = build['channel']?.toString().toUpperCase() ?? '';
+          if (channel == 'STABLE' || channel == 'RECOMMENDED') {
+            chosen = build;
+            break;
+          }
+        }
+      }
+    } on ApiException {
+      chosen = null;
+    }
+    if (chosen == null) {
+      // Some projects answer the version's build list with a single object.
+      try {
+        final dynamic latest = await _getJson('$_fillApi/projects/paper/versions/$version/builds/latest');
+        if (latest is Map) {
+          final Map<String, dynamic> build = Map<String, dynamic>.from(latest);
+          final String channel = build['channel']?.toString().toUpperCase() ?? '';
+          if (channel == 'STABLE' || channel == 'RECOMMENDED') chosen = build;
+        }
+      } on ApiException {
+        chosen = null;
       }
     }
     if (chosen == null) {

@@ -11,7 +11,7 @@
 | المصدر | النتيجة | القرار |
 |---|---|---|
 | `api.papermc.io/v2` | **متوقف**: آخر بناء 2025-12-31، ومُعطَّل منذ 2026-07-01 | استُبدل بالكامل |
-| `fill.papermc.io/v3` | يعمل، يتطلب `User-Agent`، يعيد `downloads["server:default"]` مع `sha256` و`channel` | المصدر الوحيد لـPaper |
+| `fill.papermc.io/v3` | يعمل (تحقق مباشر: `1.21.4` → build 232، `sha256=5ee4f542…`, حجم 51,437,498) | المصدر الوحيد لـPaper |
 | `api.purpurmc.org/v2` | يعمل: `versions[]` + `builds.latest` + `<ver>/latest/download` | مستخدم |
 | `meta.fabricmc.net/v2` | يعمل: `/versions/loader/<mc>` مع رايات `stable` | مستخدم (loader مستقر فقط) |
 | `piston-meta.mojang.com/.../version_manifest_v2.json` | يعمل؛ يحوي `javaVersion.majorVersion` | مصدر Vanilla + Java |
@@ -72,7 +72,8 @@
 
 ## 3. الاختبارات / Tests
 
-يُشغَّل على GitHub Actions: `flutter analyze` + `flutter test` + بناء APK.
+يُشغَّل على GitHub Actions: `flutter analyze` + `flutter test` (‏64 حالة اختبار في المصدر، ~70 عند التنفيذ) + بناء APK.
+آخر تشغيل ناجح: `flutter-apk-39038512806-1` (سيُحدَّث بعد آخر بناء).
 
 | ما تمت تغطيته | النوع |
 |---|---|
