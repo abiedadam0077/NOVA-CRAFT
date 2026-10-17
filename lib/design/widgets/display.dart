@@ -567,7 +567,7 @@ class ServerCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = context.nova;
     final bool online = phase == ServerPhase.online;
-    final int? max = playersMax ?? server.maxPlayers;
+    final int max = playersMax ?? server.maxPlayers;
     return PressableScale(
       onTap: onTap,
       child: Container(
