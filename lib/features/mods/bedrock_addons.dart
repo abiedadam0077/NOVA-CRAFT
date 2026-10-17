@@ -5,6 +5,7 @@ import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
 import '../../core/formatters.dart';
+import '../../core/github_api.dart';
 import '../../core/models.dart';
 import '../../core/provisioner.dart';
 import '../../core/strings.dart';
@@ -191,11 +192,13 @@ class _BedrockAddonsViewState extends State<BedrockAddonsView> {
       return;
     }
     final String name = file.name.toLowerCase();
+    final GitHubApi api = AppScope.read(context).api;
     setState(() => _busy = true);
     try {
-      if (name.endsWith('.mcworld') || name.endsWith('.zip') && await _looksLikeWorld(bytes)) {
+      final bool isWorld = name.endsWith('.mcworld') || (name.endsWith('.zip') && await _looksLikeWorld(bytes));
+      if (isWorld) {
         await Provisioner.uploadWorldImport(
-          AppScope.read(context).api,
+          api,
           widget.config,
           Uint8List.fromList(bytes),
           name: file.name.replaceAll(RegExp(r'\.(mcworld|zip)$', caseSensitive: false), ''),
@@ -204,7 +207,7 @@ class _BedrockAddonsViewState extends State<BedrockAddonsView> {
         showNovaToast(context, L10n.t('worldImportQueued'), kind: ToastKind.success);
       } else if (name.endsWith('.mcaddon') || name.endsWith('.mcpack')) {
         await Provisioner.uploadAddon(
-          AppScope.read(context).api,
+          api,
           widget.config,
           file.name,
           Uint8List.fromList(bytes),

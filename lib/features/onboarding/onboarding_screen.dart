@@ -7,7 +7,6 @@ import '../../design/tokens.dart';
 import '../../design/widgets/background.dart';
 import '../../design/widgets/brand.dart';
 import '../../design/widgets/buttons.dart';
-import '../../design/widgets/surfaces.dart';
 import '../../state/app_state.dart';
 
 /// Three-slide first-run introduction. It introduces the product, then hands

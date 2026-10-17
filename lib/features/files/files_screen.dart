@@ -275,6 +275,7 @@ class _ServerFilesViewState extends State<ServerFilesView> {
     final String? encoded = _snapshot[path];
     if (encoded == null) {
       final bool live = await _requestRead(path, name);
+      if (!mounted) return;
       if (!live) {
         showNovaToast(context, L10n.t('filesOfflineSnapshotNote'), kind: ToastKind.warning);
       }

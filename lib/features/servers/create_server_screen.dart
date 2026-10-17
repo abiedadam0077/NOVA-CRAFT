@@ -291,18 +291,20 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
       ResolvedDownload resolved;
       if (_edition == 'BEDROCK') {
         resolved = await state.minecraft.resolveBedrock();
-      } else switch (label) {
-        case 'PAPER':
-          resolved = await state.minecraft.resolvePaper(_version);
-          break;
-        case 'PURPUR':
-          resolved = await state.minecraft.resolvePurpur(_version);
-          break;
-        case 'FABRIC':
-          resolved = await state.minecraft.resolveFabric(_version);
-          break;
-        default:
-          resolved = await state.minecraft.resolveVanilla(_version);
+      } else {
+        switch (label) {
+          case 'PAPER':
+            resolved = await state.minecraft.resolvePaper(_version);
+            break;
+          case 'PURPUR':
+            resolved = await state.minecraft.resolvePurpur(_version);
+            break;
+          case 'FABRIC':
+            resolved = await state.minecraft.resolveFabric(_version);
+            break;
+          default:
+            resolved = await state.minecraft.resolveVanilla(_version);
+        }
       }
       _doneSteps = <String>[..._doneSteps, 'resolve'];
       setState(() => _progress = L10n.t('provisioningFiles'));
@@ -379,7 +381,7 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
   Future<void> _openInstall() async {
     setState(() => _needsInstall = false);
     if (!mounted) return;
-    await launchUrl(AppConfig.appInstallUrlFor(_repoFull), mode: LaunchMode.externalApplication);
+    await launchUrl(Uri.parse(AppConfig.appInstallUrlFor(_repoFull)), mode: LaunchMode.externalApplication);
   }
 
   /// Called after the user returns from the browser. GitHub's installation
@@ -1024,8 +1026,6 @@ class _EditionCard extends StatelessWidget {
     required this.accent,
     required this.selected,
     required this.onTap,
-    this.disabled = false,
-    this.badge,
   });
 
   final String title;
@@ -1034,14 +1034,12 @@ class _EditionCard extends StatelessWidget {
   final Color accent;
   final bool selected;
   final VoidCallback? onTap;
-  final bool disabled;
-  final String? badge;
 
   @override
   Widget build(BuildContext context) {
     final p = context.nova;
     return Opacity(
-      opacity: disabled ? 0.6 : 1,
+      opacity: 1,
       child: PressableScale(
         onTap: onTap,
         child: Container(
@@ -1068,15 +1066,7 @@ class _EditionCard extends StatelessWidget {
                 child: Column(
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
-                    Row(
-                      children: <Widget>[
-                        Text(title, style: NovaTextStyles.title(p.text)),
-                        if (badge != null) ...<Widget>[
-                          const SizedBox(width: 8),
-                          Pill(label: badge!, tone: PillTone.warning, dense: true),
-                        ],
-                      ],
-                    ),
+                    Text(title, style: NovaTextStyles.title(p.text)),
                     const SizedBox(height: 3),
                     Text(body, style: NovaTextStyles.small(p.textMuted)),
                   ],

@@ -227,8 +227,11 @@ class ServerMonitor extends ChangeNotifier {
     final bool pingOnline = ping?.online ?? false;
     if (stopRequested) return ServerPhase.stopping;
     if (pingOnline) return ServerPhase.online;
-    if (runtimeFresh && (runtime?.ready ?? false) && tunnelConnected) return ServerPhase.online;
-    if (runtimeFresh && (runtime?.ready ?? false)) return ServerPhase.starting;
+    // The runner is authoritative about the process. A reachable public
+    // address is a separate fact, shown separately: reporting a running
+    // server as "starting" forever just because Playit has no tunnel would be
+    // inaccurate.
+    if (runtimeFresh && (runtime?.ready ?? false)) return ServerPhase.online;
     if (runActive) return ServerPhase.starting;
     if (run != null && run!.isCompleted && (run!.conclusion == 'failure' || run!.conclusion == 'timed_out')) {
       return ServerPhase.error;

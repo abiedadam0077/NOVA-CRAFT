@@ -162,9 +162,9 @@ class PlayitApi {
     _unwrap(response);
   }
 
-  /// Lists tunnels through the account-level endpoint. Only usable with a
-  /// session/partner key, so it is exposed for completeness but never relied on.
-  Future<Map<String, dynamic>> _post(String secret, String path, Map<String, dynamic> body) {
+  /// Performs one agent-API POST. The Authorization header is the only place
+  /// the key appears; responses are unwrapped by [_unwrap].
+  Future<http.Response> _post(String secret, String path, Map<String, dynamic> body) {
     return _client
         .post(
           Uri.parse('$apiBase$path'),

@@ -3,8 +3,6 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/config.dart';
-import '../../core/formatters.dart';
-import '../../core/models.dart';
 import '../../core/playit_api.dart';
 import '../../core/strings.dart';
 import '../../design/theme.dart';
@@ -12,6 +10,7 @@ import '../../design/tokens.dart';
 import '../../design/widgets/background.dart';
 import '../../design/widgets/brand.dart';
 import '../../design/widgets/buttons.dart';
+import '../../design/widgets/display.dart';
 import '../../design/widgets/feedback.dart';
 import '../../design/widgets/inputs.dart';
 import '../../design/widgets/nav.dart';
@@ -230,7 +229,7 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
                       ),
                     ] else ...<Widget>[
                       _AgentCard(
-                        agent: agent!,
+                        agent: agent,
                         javaTunnel: javaTunnel,
                         bedrockTunnel: bedrockTunnel,
                         note: _note,
