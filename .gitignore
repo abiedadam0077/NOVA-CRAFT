@@ -1,0 +1,13 @@
+*.iml
+.gradle
+/local.properties
+/.idea
+.DS_Store
+/build
+/captures
+/app/build
+*.jks
+*.keystore
+*.p12
+*.pem
+nova-craft-signing/
