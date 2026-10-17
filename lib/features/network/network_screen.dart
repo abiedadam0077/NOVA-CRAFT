@@ -63,7 +63,7 @@ class _NetworkViewState extends State<NetworkView> {
   String get _effectiveAddress {
     final String configured = widget.config.connectionHostPort;
     if (configured.isNotEmpty) return configured;
-    return widget.reportedAddress.replaceFirst('tcp://', '').replaceFirst('udp://').trim();
+    return widget.reportedAddress.replaceFirst('tcp://', '').replaceFirst('udp://', '').trim();
   }
 
   String get _host => _effectiveAddress.isEmpty
