@@ -792,6 +792,8 @@ const Map<String, String> ar = <String, String>{
   'connWrite': 'كتابة',
   'connReadOnly': 'قراءة فقط',
   'connNoServer': 'لا يوجد سيرفر محدد لفحص Secrets.',
+  'runStartedNoPlayit': 'بدأ التشغيل، لكن مفتاح Playit غير محفوظ بعد — لن يكون هناك عنوان عام حتى تضيف المفتاح من إعدادات السيرفر ← الشبكة.',
+  'provisioningHintNoPlayit': 'تم إنشاء المستودع. أضف مفتاح Playit من إعدادات السيرفر ← الشبكة قبل مشاركة عنوان عام.',
 };
 
 const Map<String, String> en = <String, String>{
@@ -1545,4 +1547,6 @@ const Map<String, String> en = <String, String>{
   'connWrite': 'write',
   'connReadOnly': 'read only',
   'connNoServer': 'No server selected to test Secrets.',
+  'runStartedNoPlayit': 'The run started, but no Playit key is stored yet — there will be no public address until you add it in Server settings → Network.',
+  'provisioningHintNoPlayit': 'The repository is ready. Add your Playit key in Server settings → Network before sharing a public address.',
 };

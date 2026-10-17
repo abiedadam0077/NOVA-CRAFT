@@ -295,6 +295,57 @@ class _AccountScreenState extends State<AccountScreen> {
                       ),
                     ),
                     const SizedBox(height: 18),
+                    SectionHeader(title: L10n.t('connectionCheckTitle'), icon: Icons.fact_check_rounded),
+                    Container(
+                      padding: const EdgeInsets.all(14),
+                      decoration: BoxDecoration(
+                        color: p.cardSoft,
+                        borderRadius: NovaRadii.rLg,
+                        border: Border.all(color: p.stroke),
+                      ),
+                      child: Column(
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Text(L10n.t('connectionCheckBody'), style: NovaTextStyles.small(p.textMuted)),
+                          const SizedBox(height: 10),
+                          NovaButton(
+                            label: _testing ? L10n.t('testing') : L10n.t('connectionCheckRun'),
+                            icon: Icons.wifi_tethering_rounded,
+                            size: NovaButtonSize.compact,
+                            expand: false,
+                            loading: _testing,
+                            onPressed: _testing ? null : _testConnection,
+                          ),
+                          if (_tokenStatus != null) ...<Widget>[
+                            const SizedBox(height: 10),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                Icon(Icons.check_circle_rounded, size: 16, color: p.successBright),
+                                const SizedBox(width: 8),
+                                Expanded(child: Text(_tokenStatus!, style: NovaTextStyles.small(p.text))),
+                              ],
+                            ),
+                          ],
+                          if (_secretStatus != null) ...<Widget>[
+                            const SizedBox(height: 6),
+                            Row(
+                              crossAxisAlignment: CrossAxisAlignment.start,
+                              children: <Widget>[
+                                Icon(Icons.key_rounded, size: 16, color: p.primaryBright),
+                                const SizedBox(width: 8),
+                                Expanded(child: Text(_secretStatus!, style: NovaTextStyles.small(p.text))),
+                              ],
+                            ),
+                          ],
+                          if (_testError != null) ...<Widget>[
+                            const SizedBox(height: 10),
+                            InlineError(message: _testError!, onRetry: _testConnection),
+                          ],
+                        ],
+                      ),
+                    ),
+                    const SizedBox(height: 18),
                     SectionHeader(title: L10n.t('playitAccount'), icon: Icons.hub_rounded),
                     Container(
                       padding: const EdgeInsets.all(14),
@@ -414,47 +465,6 @@ class _CountBox extends StatelessWidget {
   final String value;
   final IconData icon;
 
-  /// Real end-to-end check of the GitHub session: the token identity, the app
-  /// installations, and — for the selected server — read/write access plus the
-  /// ability to list repository secrets (what the Playit key install needs).
-  Future<void> _testConnection() async {
-    setState(() {
-      _testing = true;
-      _testError = null;
-      _tokenStatus = null;
-      _secretStatus = null;
-    });
-    try {
-      final AppState state = AppScope.read(context);
-      await state.ensureTokenFresh();
-      final GhUser? me = await state.api.getUser();
-      final List<GhInstallation> installations = await state.api.listInstallations();
-      String secretStatus = L10n.t('connNoServer');
-      final ServerConfig? server = state.selected;
-      if (server != null) {
-        final GhRepo repo = await state.api.getRepo(server.repoOwner, server.repoName);
-        final List<String> names = await state.api.listSecretNames(server.repoOwner, server.repoName);
-        final bool canWrite = repo.permissionsPush;
-        secretStatus = L10n.f('connSecretsOk', <String, String>{
-          'count': '${names.length}',
-          'access': canWrite ? L10n.t('connWrite') : L10n.t('connReadOnly'),
-        });
-      }
-      if (!mounted) return;
-      setState(() {
-        _tokenStatus = L10n.f('connTokenOk', <String, String>{
-          'login': me?.login ?? '—',
-          'count': '${installations.length}',
-        });
-        _secretStatus = secretStatus;
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _testError = Fmt.error(error));
-    } finally {
-      if (mounted) setState(() => _testing = false);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -490,47 +500,6 @@ class _PermissionRow extends StatelessWidget {
   final String label;
   final String text;
 
-  /// Real end-to-end check of the GitHub session: the token identity, the app
-  /// installations, and — for the selected server — read/write access plus the
-  /// ability to list repository secrets (what the Playit key install needs).
-  Future<void> _testConnection() async {
-    setState(() {
-      _testing = true;
-      _testError = null;
-      _tokenStatus = null;
-      _secretStatus = null;
-    });
-    try {
-      final AppState state = AppScope.read(context);
-      await state.ensureTokenFresh();
-      final GhUser? me = await state.api.getUser();
-      final List<GhInstallation> installations = await state.api.listInstallations();
-      String secretStatus = L10n.t('connNoServer');
-      final ServerConfig? server = state.selected;
-      if (server != null) {
-        final GhRepo repo = await state.api.getRepo(server.repoOwner, server.repoName);
-        final List<String> names = await state.api.listSecretNames(server.repoOwner, server.repoName);
-        final bool canWrite = repo.permissionsPush;
-        secretStatus = L10n.f('connSecretsOk', <String, String>{
-          'count': '${names.length}',
-          'access': canWrite ? L10n.t('connWrite') : L10n.t('connReadOnly'),
-        });
-      }
-      if (!mounted) return;
-      setState(() {
-        _tokenStatus = L10n.f('connTokenOk', <String, String>{
-          'login': me?.login ?? '—',
-          'count': '${installations.length}',
-        });
-        _secretStatus = secretStatus;
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _testError = Fmt.error(error));
-    } finally {
-      if (mounted) setState(() => _testing = false);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {
@@ -555,47 +524,6 @@ class _SecurityLine extends StatelessWidget {
   final IconData icon;
   final String label;
 
-  /// Real end-to-end check of the GitHub session: the token identity, the app
-  /// installations, and — for the selected server — read/write access plus the
-  /// ability to list repository secrets (what the Playit key install needs).
-  Future<void> _testConnection() async {
-    setState(() {
-      _testing = true;
-      _testError = null;
-      _tokenStatus = null;
-      _secretStatus = null;
-    });
-    try {
-      final AppState state = AppScope.read(context);
-      await state.ensureTokenFresh();
-      final GhUser? me = await state.api.getUser();
-      final List<GhInstallation> installations = await state.api.listInstallations();
-      String secretStatus = L10n.t('connNoServer');
-      final ServerConfig? server = state.selected;
-      if (server != null) {
-        final GhRepo repo = await state.api.getRepo(server.repoOwner, server.repoName);
-        final List<String> names = await state.api.listSecretNames(server.repoOwner, server.repoName);
-        final bool canWrite = repo.permissionsPush;
-        secretStatus = L10n.f('connSecretsOk', <String, String>{
-          'count': '${names.length}',
-          'access': canWrite ? L10n.t('connWrite') : L10n.t('connReadOnly'),
-        });
-      }
-      if (!mounted) return;
-      setState(() {
-        _tokenStatus = L10n.f('connTokenOk', <String, String>{
-          'login': me?.login ?? '—',
-          'count': '${installations.length}',
-        });
-        _secretStatus = secretStatus;
-      });
-    } catch (error) {
-      if (!mounted) return;
-      setState(() => _testError = Fmt.error(error));
-    } finally {
-      if (mounted) setState(() => _testing = false);
-    }
-  }
 
   @override
   Widget build(BuildContext context) {

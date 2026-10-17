@@ -333,10 +333,13 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
         _progress = L10n.t('provisioningDone');
         _creating = false;
       });
+      final String body = !secretInstalled
+          ? (_startNow ? L10n.t('runStartedNoPlayit') : L10n.t('provisioningHintNoPlayit'))
+          : (_startNow ? L10n.t('runStarted') : L10n.t('provisioningHint'));
       await showNovaConfirm(
         context,
         title: L10n.t('provisioningDone'),
-        body: _startNow ? L10n.t('runStarted') : L10n.t('provisioningHint'),
+        body: body,
         confirmLabel: L10n.t('goToServer'),
         cancelLabel: L10n.t('close'),
       );

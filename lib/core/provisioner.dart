@@ -282,6 +282,7 @@ class Provisioner {
             repoOwner: repo.owner,
             repoName: repo.name,
             repoPrivate: repo.private,
+            defaultBranch: repo.defaultBranch.isEmpty ? config.defaultBranch : repo.defaultBranch,
             name: config.name.isEmpty ? repo.name : config.name,
           );
         } catch (_) {
