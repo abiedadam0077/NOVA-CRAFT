@@ -11,7 +11,7 @@ on:
         default: false
 
 permissions:
-  contents: read
+  contents: write
 
 jobs:
   build:
@@ -26,9 +26,29 @@ jobs:
         with:
           gradle-version: "8.11.1"
       - name: Unit tests
-        run: gradle testDebugUnitTest --stacktrace
+        run: set -o pipefail; gradle testDebugUnitTest --stacktrace 2>&1 | tee /tmp/build.log
       - name: Assemble debug
-        run: gradle assembleDebug --stacktrace
+        run: set -o pipefail; gradle assembleDebug --stacktrace 2>&1 | tee -a /tmp/build.log
+      - name: Publish failure log as commit comment
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tail -n 220 /tmp/build.log > /tmp/fail.txt || true
+          python3 - << 'PYEOF'
+          import json, urllib.request, os
+          body = "CI failure log tail:
+
+```text
+" + open("/tmp/fail.txt", errors="ignore").read()[-55000:] + "
+```"
+          data = json.dumps({"body": body}).encode()
+          req = urllib.request.Request(
+              f"https://api.github.com/repos/{os.environ['GITHUB_REPOSITORY']}/commits/{os.environ['GITHUB_SHA']}/comments",
+              data=data, method="POST",
+              headers={"Authorization": "Bearer " + os.environ["GH_TOKEN"], "Accept": "application/vnd.github+json", "Content-Type": "application/json"})
+          urllib.request.urlopen(req)
+          PYEOF
       - name: Upload debug APK
         uses: actions/upload-artifact@v4
         with:
