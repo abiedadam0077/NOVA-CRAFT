@@ -5,6 +5,7 @@ import '../core/github_api.dart';
 import '../core/minecraft_api.dart';
 import '../core/models.dart';
 import '../core/modrinth_api.dart';
+import '../core/playit_api.dart';
 import '../core/provisioner.dart';
 import '../core/secure_store.dart';
 import '../core/strings.dart';
@@ -48,8 +49,8 @@ class AppState extends ChangeNotifier {
   /// itself is never cached in memory beyond the write call.
   bool playitPrepared = false;
 
-  /// Set only when the user explicitly continues without Playit. It is never
-  /// persisted, so the next launch asks again.
+  /// Set only when the user explicitly continues without Playit. Persisted so
+  /// the guided step is not repeated on every launch.
   bool playitSkipped = false;
 
   bool get signedIn => user != null;
@@ -64,6 +65,7 @@ class AppState extends ChangeNotifier {
       notifyBackups = store.notifyBackups;
       notifyFailures = store.notifyFailures;
       playitPrepared = store.playitPrepared && (await store.playitSecret()) != null;
+      playitSkipped = store.playitSkipped;
       L10n.lang = language;
       await _restoreSession();
     } catch (error) {
@@ -134,6 +136,24 @@ class AppState extends ChangeNotifier {
     await refreshServers();
   }
 
+  /// Refreshes the GitHub user token when it is close to expiry.
+  ///
+  /// GitHub App user tokens live 8 hours. Refreshing ahead of the expiry keeps
+  /// long sessions (and the Playit secret install) from failing with 401.
+  Future<bool> ensureTokenFresh({Duration margin = const Duration(minutes: 15)}) async {
+    final String? current = api.accessToken;
+    if (current == null || current.isEmpty) return false;
+    final DateTime? expiry = store.tokenExpiry();
+    if (expiry == null || DateTime.now().add(margin).isBefore(expiry)) return true;
+    final String? refresh = await store.refreshToken();
+    if (refresh == null || refresh.isEmpty) return true;
+    final TokenPoll result = await api.refreshUserToken(AppConfig.githubClientId, refresh);
+    if (result.kind != TokenPollKind.success || result.accessToken == null) return false;
+    await store.saveTokens(result.accessToken!, result.refreshToken ?? refresh, result.expiresIn);
+    api.accessToken = result.accessToken;
+    return true;
+  }
+
   Future<void> refreshUser() async {
     if (api.accessToken == null) return;
     try {
@@ -154,6 +174,7 @@ class AppState extends ChangeNotifier {
     serversError = null;
     notifyListeners();
     try {
+      await ensureTokenFresh();
       final List<ServerConfig> found = await Provisioner.discoverServers(api);
       servers = found;
       final String? lastRepo = store.lastServerRepo;
@@ -203,14 +224,26 @@ class AppState extends ChangeNotifier {
 
   /// Stores the Playit agent secret encrypted on the device. It is installed
   /// into a repository secret at creation time or from the network settings.
+  /// Asks Playit about the stored agent key. The key never leaves this call:
+  /// widgets only receive the sanitised [PlayitAgentState].
+  Future<PlayitAgentState> inspectPlayit({bool bedrock = false}) async {
+    final String? secret = await store.playitSecret();
+    if (secret == null || secret.isEmpty) {
+      return const PlayitAgentState.unknown('missing-secret');
+    }
+    return PlayitApi().agentState(secret, bedrock: bedrock);
+  }
+
   Future<void> savePlayitSecret(String secret) async {
     await store.savePlayitSecret(secret);
     playitPrepared = true;
+    playitSkipped = false;
     notifyListeners();
   }
 
-  void skipPlayitForNow() {
+  Future<void> skipPlayitForNow() async {
     playitSkipped = true;
+    await store.setPlayitSkipped(true);
     notifyListeners();
   }
 
@@ -225,8 +258,25 @@ class AppState extends ChangeNotifier {
   Future<bool> installPlayitSecret(ServerConfig config, {String? provided}) async {
     final String? secret = provided ?? await store.playitSecret();
     if (secret == null || secret.isEmpty) return false;
-    await Provisioner.writePlayitSecret(api, config, secret);
-    if (provided != null) await store.savePlayitSecret(provided);
+    await ensureTokenFresh();
+    try {
+      await Provisioner.writePlayitSecret(api, config, secret);
+    } on ApiException catch (error) {
+      if (error.status != 401) rethrow;
+      // The token expired between refreshes: refresh once and retry.
+      final String? refresh = await store.refreshToken();
+      if (refresh == null || refresh.isEmpty) rethrow;
+      final TokenPoll result = await api.refreshUserToken(AppConfig.githubClientId, refresh);
+      if (result.kind != TokenPollKind.success || result.accessToken == null) rethrow;
+      await store.saveTokens(result.accessToken!, result.refreshToken ?? refresh, result.expiresIn);
+      api.accessToken = result.accessToken;
+      await Provisioner.writePlayitSecret(api, config, secret);
+    }
+    if (provided != null) {
+      await store.savePlayitSecret(provided);
+    } else {
+      await store.markPlayitPrepared();
+    }
     playitPrepared = true;
     notifyListeners();
     return true;

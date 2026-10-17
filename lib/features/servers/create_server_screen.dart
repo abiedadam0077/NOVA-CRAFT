@@ -49,6 +49,7 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
   String? _reposError;
   String _repoMode = 'existing';
   String? _repoFull;
+  String _branch = 'main';
   bool _repoPrivate = true;
 
   int _memoryMb = 4096;
@@ -87,6 +88,15 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
     });
     try {
       final AppState state = AppScope.read(context);
+      if (_edition == 'BEDROCK') {
+        final List<String> bedrock = await state.minecraft.bedrockVersions();
+        if (!mounted) return;
+        setState(() {
+          _versions = bedrock;
+          _version = bedrock.isNotEmpty ? bedrock.first : '';
+        });
+        return;
+      }
       List<String> values;
       switch (_software) {
         case 'PAPER':
@@ -243,6 +253,17 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
         if (matches.isEmpty) throw ApiException(400, L10n.t('selectRepoRequired'));
         owner = matches.first.owner;
         repo = matches.first.name;
+        _branch = matches.first.defaultBranch.isEmpty ? 'main' : matches.first.defaultBranch;
+        setState(() => _progress = L10n.t('checkingInstallation'));
+        if (!await _verifyAccess(owner, repo)) {
+          if (!mounted) return;
+          setState(() {
+            _needsInstall = true;
+            _creating = false;
+            _progress = '';
+          });
+          return;
+        }
       } else {
         final GhRepo created = await state.api.createRepo(
           _newRepo.text.trim(),
@@ -251,18 +272,10 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
         );
         owner = created.owner;
         repo = created.name;
+        _branch = created.defaultBranch.isEmpty ? 'main' : created.defaultBranch;
         _doneSteps = <String>[..._doneSteps, 'repo'];
         setState(() => _progress = L10n.t('checkingInstallation'));
-        final List<GhInstallation> installations = await state.api.listInstallations();
-        bool hasAccess = false;
-        for (final GhInstallation installation in installations) {
-          final List<GhRepo> granted = await state.api.listInstallationRepos(installation.id);
-          if (granted.any((GhRepo r) => r.fullName == '$owner/$repo')) {
-            hasAccess = true;
-            break;
-          }
-        }
-        if (!hasAccess) {
+        if (!await _verifyAccess(owner, repo)) {
           if (!mounted) return;
           setState(() {
             _needsInstall = true;
@@ -276,7 +289,9 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
       setState(() => _progress = L10n.t('resolutionPending'));
       final String label = _software;
       ResolvedDownload resolved;
-      switch (label) {
+      if (_edition == 'BEDROCK') {
+        resolved = await state.minecraft.resolveBedrock();
+      } else switch (label) {
         case 'PAPER':
           resolved = await state.minecraft.resolvePaper(_version);
           break;
@@ -293,6 +308,7 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
       setState(() => _progress = L10n.t('provisioningFiles'));
 
       final ServerConfig config = _buildConfig(owner, repo, resolved.javaMajor).copyWith(
+        defaultBranch: _branch,
         downloadUrl: resolved.url,
         downloadSha: resolved.sha,
       );
@@ -337,14 +353,51 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
     }
   }
 
+  /// Confirms that the app is installed on the repository and that this token
+  /// can actually write to it. A 404/403 here is surfaced before any file is
+  /// created, instead of failing halfway through provisioning.
+  Future<bool> _verifyAccess(String owner, String repo) async {
+    final AppState state = AppScope.read(context);
+    state.api.rememberBranch(owner, repo, _branch);
+    try {
+      final GhRepo full = await state.api.getRepo(owner, repo);
+      _branch = full.defaultBranch.isEmpty ? _branch : full.defaultBranch;
+      state.api.rememberBranch(owner, repo, _branch);
+      final List<GhInstallation> installations = await state.api.listInstallations();
+      for (final GhInstallation installation in installations) {
+        final List<GhRepo> granted = await state.api.listInstallationRepos(installation.id);
+        if (granted.any((GhRepo r) => r.fullName == '$owner/$repo')) return true;
+      }
+      return false;
+    } catch (error) {
+      if (!mounted) return false;
+      setState(() => _createError = Fmt.error(error));
+      return false;
+    }
+  }
+
   Future<void> _openInstall() async {
-    await launchUrl(Uri.parse(AppConfig.appInstallUrl), mode: LaunchMode.externalApplication);
+    setState(() => _needsInstall = false);
     if (!mounted) return;
-    setState(() {
-      _needsInstall = false;
-      _repos = <GhRepo>[];
-    });
+    await launchUrl(AppConfig.appInstallUrlFor(_repoFull), mode: LaunchMode.externalApplication);
+  }
+
+  /// Called after the user returns from the browser. GitHub's installation
+  /// list can take a moment to include a newly granted repository, so this
+  /// re-reads it and only then clears the banner.
+  Future<void> _recheckInstall() async {
+    setState(() => _repos = <GhRepo>[]);
     await _loadRepos();
+    if (!mounted) return;
+    final List<GhRepo> matches = _repos.where((GhRepo r) => r.fullName == _repoFull).toList();
+    final bool ok = matches.isNotEmpty;
+    setState(() => _needsInstall = !ok);
+    if (ok) {
+      _branch = matches.first.defaultBranch.isEmpty ? 'main' : matches.first.defaultBranch;
+      showNovaToast(context, L10n.t('installationVerified'), kind: ToastKind.success);
+    } else {
+      showNovaToast(context, L10n.t('installationStillMissing'), kind: ToastKind.warning);
+    }
   }
 
   @override
@@ -475,7 +528,7 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
           icon: Icons.computer_rounded,
           accent: p.primaryBright,
           selected: _edition == 'JAVA',
-          onTap: () => setState(() => _edition = 'JAVA'),
+          onTap: () => _selectEdition('JAVA'),
         ),
         const SizedBox(height: 10),
         _EditionCard(
@@ -483,15 +536,15 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
           body: L10n.t('bedrockHint'),
           icon: Icons.phone_android_rounded,
           accent: p.violet,
-          selected: false,
-          disabled: true,
-          badge: L10n.t('softwareUnsupported'),
-          onTap: null,
+          selected: _edition == 'BEDROCK',
+          onTap: () => _selectEdition('BEDROCK'),
         ),
         const SizedBox(height: 22),
         Text(L10n.t('software'), style: NovaTextStyles.title(p.text)),
         const SizedBox(height: 10),
-        ...<Widget>[
+        if (_edition == 'BEDROCK') ...<Widget>[
+          _softwareTile('BDS', 'Bedrock Dedicated Server', L10n.t('bdsHint'), true),
+        ] else ...<Widget>[
           _softwareTile('PAPER', 'Paper', L10n.t('paperHint'), true),
           _softwareTile('PURPUR', 'Purpur', L10n.t('purpurHint'), true),
           _softwareTile('FABRIC', 'Fabric', L10n.t('fabricHint'), true),
@@ -500,11 +553,26 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
           _softwareTile('NEOFORGE', 'NeoForge', L10n.t('softwareUnsupportedWhy'), false),
         ],
         const SizedBox(height: 8),
-        InfoBanner(body: L10n.t('softwareUnsupportedWhy'), color: p.warning),
+        InfoBanner(
+          body: _edition == 'BEDROCK' ? L10n.t('bdsVersionNote') : L10n.t('softwareUnsupportedWhy'),
+          color: _edition == 'BEDROCK' ? p.violet : p.warning,
+        ),
       ],
       title: L10n.t('stepType'),
       subtitle: L10n.t('stepTypeBody'),
     );
+  }
+
+  void _selectEdition(String edition) {
+    if (_edition == edition) return;
+    setState(() {
+      _edition = edition;
+      _software = edition == 'BEDROCK' ? 'BDS' : 'PAPER';
+      _versions = <String>[];
+      _version = '';
+      _eula = edition == 'BEDROCK';
+    });
+    _loadVersions();
   }
 
   Widget _softwareTile(String id, String name, String body, bool enabled) {
@@ -583,9 +651,9 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
           ),
         const SizedBox(height: 18),
         InfoBanner(
-          body: L10n.t('versionSupportNote'),
+          body: _edition == 'BEDROCK' ? L10n.t('bdsVersionNote') : L10n.t('versionSupportNote'),
           icon: Icons.verified_rounded,
-          color: p.success,
+          color: _edition == 'BEDROCK' ? p.violet : p.success,
         ),
       ],
       title: L10n.t('stepVersion'),
@@ -649,12 +717,50 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
           ),
           if (_needsInstall) ...<Widget>[
             const SizedBox(height: 8),
-            InfoBanner(
-              body: L10n.t('installNeeded'),
-              icon: Icons.error_outline_rounded,
-              color: p.warning,
-              actionLabel: L10n.t('retry'),
-              onAction: _openInstall,
+            Container(
+              padding: const EdgeInsets.all(12),
+              decoration: BoxDecoration(
+                color: p.warning.withValues(alpha: 0.10),
+                borderRadius: NovaRadii.rLg,
+                border: Border.all(color: p.warning.withValues(alpha: 0.4)),
+              ),
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.stretch,
+                children: <Widget>[
+                  Row(
+                    children: <Widget>[
+                      Icon(Icons.error_outline_rounded, size: 18, color: p.warning),
+                      const SizedBox(width: 8),
+                      Expanded(child: Text(L10n.t('installNeeded'), style: NovaTextStyles.small(p.warning))),
+                    ],
+                  ),
+                  const SizedBox(height: 10),
+                  Row(
+                    children: <Widget>[
+                      Expanded(
+                        child: NovaButton(
+                          label: L10n.t('installApp'),
+                          icon: Icons.open_in_new_rounded,
+                          variant: NovaButtonVariant.secondary,
+                          size: NovaButtonSize.compact,
+                          height: 42,
+                          onPressed: _openInstall,
+                        ),
+                      ),
+                      const SizedBox(width: 8),
+                      Expanded(
+                        child: NovaButton(
+                          label: L10n.t('checkAgain'),
+                          icon: Icons.refresh_rounded,
+                          size: NovaButtonSize.compact,
+                          height: 42,
+                          onPressed: _recheckInstall,
+                        ),
+                      ),
+                    ],
+                  ),
+                ],
+              ),
             ),
           ],
         ],
@@ -728,14 +834,16 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
           icon: Icons.hub_rounded,
           color: p.primaryBright,
         ),
-        const SizedBox(height: 10),
-        NovaSwitchTile(
-          title: L10n.t('eulaAcceptLabel'),
-          subtitle: L10n.t('eulaSectionBody'),
-          value: _eula,
-          icon: Icons.gavel_rounded,
-          onChanged: (bool v) => setState(() => _eula = v),
-        ),
+        if (_edition == 'JAVA') ...<Widget>[
+          const SizedBox(height: 10),
+          NovaSwitchTile(
+            title: L10n.t('eulaAcceptLabel'),
+            subtitle: L10n.t('eulaSectionBody'),
+            value: _eula,
+            icon: Icons.gavel_rounded,
+            onChanged: (bool v) => setState(() => _eula = v),
+          ),
+        ],
       ],
       title: L10n.t('stepSettings'),
     );
@@ -890,6 +998,7 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
   }
 
   String _softwareName() {
+    if (_edition == 'BEDROCK') return 'Bedrock Dedicated Server';
     switch (_software) {
       case 'PAPER':
         return 'Paper';

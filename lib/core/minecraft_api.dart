@@ -419,6 +419,44 @@ class MinecraftApi {
 
   /// Bedrock has no public version-picker API; the workflow resolves the
   /// official Linux ZIP at run time.
+  /// Official Bedrock Dedicated Server download links (Mojang).
+  ///
+  /// There is no version chooser for Bedrock: Mojang publishes exactly one
+  /// current Linux build. This reads that link and derives the real version
+  /// from the file name, instead of scraping the HTML download page.
+  static const String _bedrockLinks = 'https://net-secondary.web.minecraft-services.net/api/v1.0/download/links';
+
+  Future<List<String>> bedrockVersions() async {
+    final ResolvedDownload latest = await resolveBedrock();
+    return <String>[latest.label.replaceFirst('Bedrock ', '')];
+  }
+
+  Future<ResolvedDownload> resolveBedrock() async {
+    final dynamic data = await _getJson(_bedrockLinks);
+    String url = '';
+    if (data is Map) {
+      final dynamic result = data['result'];
+      final dynamic links = result is Map ? result['links'] : null;
+      if (links is List) {
+        for (final dynamic raw in links) {
+          if (raw is Map && raw['downloadType'] == 'serverBedrockLinux') {
+            url = raw['downloadUrl']?.toString() ?? '';
+            break;
+          }
+        }
+      }
+    }
+    if (url.isEmpty) throw ApiException(404, 'Mojang did not return a Bedrock server download');
+    final RegExpMatch? match = RegExp(r'bedrock-server-([0-9.]+)\.zip').firstMatch(url);
+    final String version = match?.group(1) ?? 'latest';
+    return ResolvedDownload(
+      url: url,
+      sha: '',
+      javaMajor: 0,
+      label: 'Bedrock $version',
+    );
+  }
+
   ResolvedDownload bedrockPlaceholder() => const ResolvedDownload(
         url: 'https://www.minecraft.net/en-us/download/server/bedrock',
         sha: '',

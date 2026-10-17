@@ -22,20 +22,28 @@ class Provisioner {
   static const String workflowFile = 'novacraft-server.yml';
   static const String runnerPath = 'nova-craft/runner.sh';
   static const String configScriptPath = 'nova-craft/config.py';
+  static const String fileOpsPath = 'nova-craft/fileops.py';
+  static const String playitScriptPath = 'nova-craft/playit.py';
+  static const String fileOpsRequestPath = 'nova-craft/files/request.json';
+  static const String fileOpsResponsePath = 'nova-craft/files/response.json';
+  static const String manifestPath = 'nova-craft/files/manifest.json';
+  static const String addonsPath = 'nova-craft/addons';
+  static const String addonStatePath = 'nova-craft/addons/state.json';
+  static const String addonResultPath = 'nova-craft/addons/result.json';
 
   static Future<void> _putText(GitHubApi api, ServerConfig c, String path, String text, String message) async {
-    final String? sha = await api.fileSha(c.repoOwner, c.repoName, path);
-    await api.putText(c.repoOwner, c.repoName, path, text, message, sha: sha);
+    final String? sha = await api.fileSha(c.repoOwner, c.repoName, path, branch: c.defaultBranch);
+    await api.putText(c.repoOwner, c.repoName, path, text, message, sha: sha, branch: c.defaultBranch);
   }
 
   static Future<void> _putBytes(GitHubApi api, ServerConfig c, String path, Uint8List bytes, String message) async {
-    final String? sha = await api.fileSha(c.repoOwner, c.repoName, path);
-    await api.putFile(c.repoOwner, c.repoName, path, bytes, message, sha: sha);
+    final String? sha = await api.fileSha(c.repoOwner, c.repoName, path, branch: c.defaultBranch);
+    await api.putFile(c.repoOwner, c.repoName, path, bytes, message, sha: sha, branch: c.defaultBranch);
   }
 
   static Future<void> _deleteIfPresent(GitHubApi api, ServerConfig c, String path, String message) async {
-    final String? sha = await api.fileSha(c.repoOwner, c.repoName, path);
-    if (sha != null) await api.deleteFile(c.repoOwner, c.repoName, path, sha, message);
+    final String? sha = await api.fileSha(c.repoOwner, c.repoName, path, branch: c.defaultBranch);
+    if (sha != null) await api.deleteFile(c.repoOwner, c.repoName, path, sha, message, branch: c.defaultBranch);
   }
 
   /// Full provisioning: repository metadata, runner, workflow, properties,
@@ -43,6 +51,8 @@ class Provisioner {
   static Future<void> writeServerFiles(GitHubApi api, ServerConfig c, Uint8List? iconPng) async {
     await _putText(api, c, configPath, const JsonEncoder.withIndent('  ').convert(c.toJson()), 'nova: server config');
     await _putText(api, c, configScriptPath, WorkflowTemplates.configScript, 'nova: runner config bridge');
+    await _putText(api, c, fileOpsPath, WorkflowTemplates.fileOpsScript, 'nova: server file operations');
+    await _putText(api, c, playitScriptPath, WorkflowTemplates.playitScript, 'nova: playit helper');
     await _putText(api, c, runnerPath, WorkflowTemplates.runnerScript, 'nova: runner');
     await _putText(api, c, '.github/workflows/$workflowFile', WorkflowTemplates.serverWorkflow(c.id), 'nova: server workflow');
     await _putText(api, c, '$commandsPath/.gitkeep', '', 'nova: commands queue');
@@ -129,11 +139,123 @@ class Provisioner {
 
   /// Queues a world archive; the runner extracts it into the data folder, then
   /// deletes the upload so the repository does not grow without bound.
-  static Future<void> uploadWorldImport(GitHubApi api, ServerConfig c, Uint8List zipBytes) async {
+  static Future<void> uploadWorldImport(GitHubApi api, ServerConfig c, Uint8List zipBytes, {String? name}) async {
     await _putBytes(api, c, 'nova-craft/import/world.zip', zipBytes, 'nova: import world');
+    await _putText(
+      api,
+      c,
+      'nova-craft/import/world.json',
+      jsonEncode(<String, dynamic>{'name': name ?? 'Imported world', 'uploadedAt': DateTime.now().toUtc().toIso8601String()}),
+      'nova: import world metadata',
+    );
   }
 
-  static Future<void> writePlayitSecret(GitHubApi api, ServerConfig c, String secret) {
+  /// Queues a file operation for the next runner cycle. Files are only ever
+  /// touched on the runner, inside the server data folder.
+  static Future<void> queueFileOp(
+    GitHubApi api,
+    ServerConfig c,
+    Map<String, dynamic> op,
+  ) async {
+    final String id = '${DateTime.now().millisecondsSinceEpoch}-${_randomSuffix()}';
+    final Map<String, dynamic> payload = <String, dynamic>{
+      'id': id,
+      'issuedAt': DateTime.now().toUtc().toIso8601String(),
+      ...op,
+    };
+    await _putText(api, c, fileOpsRequestPath, jsonEncode(payload), 'nova: file operation $id');
+  }
+
+  /// Uploads a Bedrock add-on package (`.mcpack`, `.mcaddon`, `.mcworld`) and
+  /// records it in the add-on state the runner applies on the next start.
+  static Future<void> uploadAddon(
+    GitHubApi api,
+    ServerConfig c,
+    String fileName,
+    Uint8List bytes, {
+    required bool enabled,
+  }) async {
+    final String safeName = _safeFileName(fileName);
+    if (safeName.isEmpty) throw ApiException(400, 'Invalid add-on file name');
+    final String path = '$addonsPath/$safeName';
+    await _putBytes(api, c, path, bytes, 'nova: add-on $safeName');
+    final String stateText = await _readOrDefault(api, c, addonStatePath, '{"schema":1,"packs":[]}');
+    final Map<String, dynamic> state = _decodeState(stateText);
+    final List<dynamic> packs = List<dynamic>.from(state['packs'] as List? ?? <dynamic>[]);
+    final int index = packs.indexWhere((dynamic p) => p is Map && p['file'] == path);
+    final Map<String, dynamic> entry = <String, dynamic>{
+      'file': path,
+      'name': safeName,
+      'enabled': enabled,
+      'addedAt': DateTime.now().toUtc().toIso8601String(),
+    };
+    if (index >= 0) {
+      packs[index] = entry;
+    } else {
+      packs.add(entry);
+    }
+    state['schema'] = 1;
+    state['packs'] = packs;
+    await _putText(api, c, addonStatePath, const JsonEncoder.withIndent('  ').convert(state), 'nova: add-on state');
+  }
+
+  /// Enables or disables an already uploaded add-on. The runner rewrites the
+  /// world pack manifests, so this changes real behaviour.
+  static Future<void> setAddonEnabled(GitHubApi api, ServerConfig c, String file, bool enabled) async {
+    final String stateText = await _readOrDefault(api, c, addonStatePath, '{"schema":1,"packs":[]}');
+    final Map<String, dynamic> state = _decodeState(stateText);
+    final List<dynamic> packs = List<dynamic>.from(state['packs'] as List? ?? <dynamic>[]);
+    bool found = false;
+    for (int i = 0; i < packs.length; i++) {
+      final dynamic entry = packs[i];
+      if (entry is Map && entry['file'] == file) {
+        packs[i] = <String, dynamic>{...Map<String, dynamic>.from(entry), 'enabled': enabled};
+        found = true;
+      }
+    }
+    if (!found) throw ApiException(404, 'Add-on not found in this server');
+    state['packs'] = packs;
+    await _putText(api, c, addonStatePath, const JsonEncoder.withIndent('  ').convert(state), 'nova: toggle add-on');
+  }
+
+  static Future<void> removeAddon(GitHubApi api, ServerConfig c, String file) async {
+    final String stateText = await _readOrDefault(api, c, addonStatePath, '{"schema":1,"packs":[]}');
+    final Map<String, dynamic> state = _decodeState(stateText);
+    final List<dynamic> packs = List<dynamic>.from(state['packs'] as List? ?? <dynamic>[]);
+    packs.removeWhere((dynamic entry) => entry is Map && entry['file'] == file);
+    state['packs'] = packs;
+    await _putText(api, c, addonStatePath, const JsonEncoder.withIndent('  ').convert(state), 'nova: remove add-on');
+    await _deleteIfPresent(api, c, file, 'nova: delete add-on package');
+  }
+
+  static Future<String> _readOrDefault(GitHubApi api, ServerConfig c, String path, String fallback) async {
+    try {
+      final String text = await api.getFileText(c.repoOwner, c.repoName, path);
+      if (text.trim().isEmpty) return fallback;
+      return text;
+    } catch (_) {
+      return fallback;
+    }
+  }
+
+  static Map<String, dynamic> _decodeState(String text) {
+    try {
+      final dynamic decoded = jsonDecode(text);
+      if (decoded is Map) return Map<String, dynamic>.from(decoded);
+    } catch (_) {
+      // Corrupt state is replaced rather than crashing the screen.
+    }
+    return <String, dynamic>{'schema': 1, 'packs': <dynamic>[]};
+  }
+
+  static String _safeFileName(String value) {
+    final String base = value.split(RegExp(r'[/\]')).last.trim();
+    final String cleaned = base.replaceAll(RegExp(r'[^A-Za-z0-9._ -]'), '_');
+    if (cleaned.isEmpty || cleaned == '.' || cleaned == '..') return '';
+    return cleaned.length > 120 ? cleaned.substring(cleaned.length - 120) : cleaned;
+  }
+
+  static Future<SecretWriteResult> writePlayitSecret(GitHubApi api, ServerConfig c, String secret) {
     return api.putSecret(c.repoOwner, c.repoName, 'PLAYIT_SECRET_KEY', secret.trim());
   }
 

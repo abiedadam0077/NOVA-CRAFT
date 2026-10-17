@@ -14,6 +14,7 @@ import '../../state/app_state.dart';
 import '../console/console_screen.dart';
 import '../files/files_screen.dart';
 import '../home/home_screen.dart';
+import '../mods/bedrock_addons.dart';
 import '../mods/mods_screen.dart';
 import '../servers/create_server_screen.dart';
 import '../settings/server_settings_screen.dart';
@@ -103,7 +104,9 @@ class _ModsTab extends StatelessWidget {
     }
     return SafeArea(
       bottom: false,
-      child: ModsView(config: server, active: active),
+      child: server.isBedrock
+          ? BedrockAddonsView(config: server, active: active)
+          : ModsView(config: server, active: active),
     );
   }
 }

@@ -18,6 +18,11 @@ class GitHubApi {
   String? accessToken;
   String? lastRateLimitRemaining;
 
+  /// Repository default branch cache. Every write and read has to target the
+  /// branch that actually exists; assuming `main` breaks older accounts (and
+  /// any repository whose default branch is `master` or custom).
+  final Map<String, String> _defaultBranches = <String, String>{};
+
   static const Duration _timeout = Duration(seconds: 40);
 
   Map<String, String> _headers({bool json = true, String? token, bool acceptRaw = false}) {
@@ -73,6 +78,16 @@ class GitHubApi {
       throw ApiException(403, 'GitHub rate limit reached${when.isEmpty ? '' : ' (resets $when)'}.');
     }
     if (message.isEmpty) message = 'GitHub ${response.statusCode}';
+    final String lower = message.toLowerCase();
+    if (response.statusCode == 403 &&
+        (lower.contains('resource not accessible') || lower.contains('integration') || lower.contains('must have'))) {
+      message = 'GitHub refused the request: the NOVA CRAFT app needs to be installed on this repository '
+          'with Contents, Actions, Workflows and Secrets access. Open the install page, grant access to the repository, '
+          'then try again. ($message)';
+    } else if (response.statusCode == 404 && lower == 'not found') {
+      message = 'GitHub returned “Not found”. The repository, branch or file does not exist, '
+          'or the app has no access to it.';
+    }
     throw ApiException(response.statusCode, message);
   }
 
@@ -219,7 +234,7 @@ class GitHubApi {
   }
 
   Future<GhRepo> createRepo(String name, bool isPrivate, String description) async {
-    final dynamic data = _decode(await _send(
+    dynamic data = _decode(await _send(
       'POST',
       '${AppConfig.githubApi}/user/repos',
       jsonBody: <String, dynamic>{
@@ -230,7 +245,19 @@ class GitHubApi {
       },
     ));
     if (data is! Map) throw ApiException(500, 'Unexpected repository response');
-    return GhRepo.fromJson(Map<String, dynamic>.from(data));
+    final GhRepo created = GhRepo.fromJson(Map<String, dynamic>.from(data));
+    // A brand new repository can 404 for a moment (repository creation is
+    // asynchronous). Wait until it is readable before provisioning files.
+    for (int attempt = 0; attempt < 6; attempt++) {
+      try {
+        await defaultBranchOf(created.owner, created.name);
+        break;
+      } on ApiException {
+        await Future<void>.delayed(Duration(milliseconds: 700 * (attempt + 1)));
+      }
+    }
+    rememberBranch(created.owner, created.name, created.defaultBranch);
+    return created;
   }
 
   Future<GhRepo> getRepo(String owner, String repo) async {
@@ -240,9 +267,12 @@ class GitHubApi {
   }
 
   // --------------------------------------------------------------- contents
-  Future<List<DirEntry>> listDir(String owner, String repo, String path) async {
+  Future<List<DirEntry>> listDir(String owner, String repo, String path, {String? branch}) async {
     final String clean = _cleanPath(path);
-    final Uri uri = Uri.parse('${AppConfig.githubApi}/repos/$owner/$repo/contents$clean');
+    final String ref = branch ?? await defaultBranchOf(owner, repo);
+    final Uri uri = Uri.parse('${AppConfig.githubApi}/repos/$owner/$repo/contents$clean').replace(
+      queryParameters: <String, String>{'ref': ref},
+    );
     final http.Response response = await _send('GET', uri.toString());
     if (response.statusCode == 404) return <DirEntry>[];
     final dynamic data = _decode(response);
@@ -259,23 +289,27 @@ class GitHubApi {
     return out;
   }
 
-  Future<Map<String, dynamic>> _contentMeta(String owner, String repo, String path) async {
-    final dynamic data = _decode(await _send('GET', '${AppConfig.githubApi}/repos/$owner/$repo/contents${_cleanPath(path)}'));
+  Future<Map<String, dynamic>> _contentMeta(String owner, String repo, String path, {String? branch}) async {
+    final String ref = branch ?? await defaultBranchOf(owner, repo);
+    final Uri uri = Uri.parse('${AppConfig.githubApi}/repos/$owner/$repo/contents${_cleanPath(path)}').replace(
+      queryParameters: <String, String>{'ref': ref},
+    );
+    final dynamic data = _decode(await _send('GET', uri.toString()));
     if (data is! Map) throw ApiException(400, 'Not a file');
     return Map<String, dynamic>.from(data);
   }
 
-  Future<String> getFileText(String owner, String repo, String path) async {
-    final Map<String, dynamic> meta = await _contentMeta(owner, repo, path);
+  Future<String> getFileText(String owner, String repo, String path, {String? branch}) async {
+    final Map<String, dynamic> meta = await _contentMeta(owner, repo, path, branch: branch);
     final String? content = meta['content']?.toString();
     if (content == null || content.isEmpty) {
-      return utf8.decode(await getFileBytes(owner, repo, path), allowMalformed: true);
+      return utf8.decode(await getFileBytes(owner, repo, path, branch: branch), allowMalformed: true);
     }
     return utf8.decode(base64Decode(content.replaceAll('\n', '')));
   }
 
-  Future<Uint8List> getFileBytes(String owner, String repo, String path) async {
-    final Map<String, dynamic> meta = await _contentMeta(owner, repo, path);
+  Future<Uint8List> getFileBytes(String owner, String repo, String path, {String? branch}) async {
+    final Map<String, dynamic> meta = await _contentMeta(owner, repo, path, branch: branch);
     final int size = (meta['size'] as num?)?.toInt() ?? 0;
     if (size > 1000000 && meta['git_url'] != null) {
       final dynamic blob = _decode(await _send('GET', meta['git_url'].toString()));
@@ -289,9 +323,9 @@ class GitHubApi {
     return Uint8List.fromList(base64Decode(content.replaceAll('\n', '')));
   }
 
-  Future<String?> fileSha(String owner, String repo, String path) async {
+  Future<String?> fileSha(String owner, String repo, String path, {String? branch}) async {
     try {
-      final Map<String, dynamic> meta = await _contentMeta(owner, repo, path);
+      final Map<String, dynamic> meta = await _contentMeta(owner, repo, path, branch: branch);
       return meta['sha']?.toString();
     } on ApiException catch (error) {
       if (error.status == 404) return null;
@@ -306,19 +340,20 @@ class GitHubApi {
     Uint8List bytes,
     String message, {
     String? sha,
-    String branch = 'main',
+    String? branch,
   }) async {
+    final String target = branch ?? await defaultBranchOf(owner, repo);
     if (bytes.length <= 1000000) {
       final Map<String, dynamic> body = <String, dynamic>{
         'message': message,
         'content': base64Encode(bytes),
         if (sha != null) 'sha': sha,
-        'branch': branch,
+        'branch': target,
       };
       _decode(await _send('PUT', '${AppConfig.githubApi}/repos/$owner/$repo/contents${_cleanPath(path)}', jsonBody: body));
       return;
     }
-    await uploadViaGitData(owner, repo, path, bytes, message, branch: branch);
+    await uploadViaGitData(owner, repo, path, bytes, message, branch: target);
   }
 
   Future<void> putText(
@@ -339,22 +374,24 @@ class GitHubApi {
     String path,
     String sha,
     String message, {
-    String branch = 'main',
+    String? branch,
   }) async {
+    final String target = branch ?? await defaultBranchOf(owner, repo);
     _decode(await _send(
       'DELETE',
       '${AppConfig.githubApi}/repos/$owner/$repo/contents${_cleanPath(path)}',
-      jsonBody: <String, dynamic>{'message': message, 'sha': sha, 'branch': branch},
+      jsonBody: <String, dynamic>{'message': message, 'sha': sha, 'branch': target},
     ));
   }
 
   /// Commit date for a single path, used by the Files browser "date" sort.
   /// Returns null when GitHub has no commit for that path.
-  Future<DateTime?> lastCommitDate(String owner, String repo, String path, {String branch = 'main'}) async {
+  Future<DateTime?> lastCommitDate(String owner, String repo, String path, {String? branch}) async {
     try {
+      final String ref = branch ?? await defaultBranchOf(owner, repo);
       final dynamic data = await _send(
         'GET',
-        '${AppConfig.githubApi}/repos/$owner/$repo/commits?path=${Uri.encodeQueryComponent(path)}&sha=$branch&per_page=1',
+        '${AppConfig.githubApi}/repos/$owner/$repo/commits?path=${Uri.encodeQueryComponent(path)}&sha=$ref&per_page=1',
       );
       final dynamic decoded = _decode(data);
       if (decoded is List && decoded.isNotEmpty && decoded.first is Map) {
@@ -378,16 +415,17 @@ class GitHubApi {
     String path,
     Uint8List bytes,
     String message, {
-    String branch = 'main',
+    String? branch,
   }) async {
     final String base = '${AppConfig.githubApi}/repos/$owner/$repo';
+    final String target = branch ?? await defaultBranchOf(owner, repo);
     final dynamic blob = _decode(await _send(
       'POST',
       '$base/git/blobs',
       jsonBody: <String, dynamic>{'content': base64Encode(bytes), 'encoding': 'base64'},
     ));
     if (blob is! Map) throw ApiException(500, 'Blob upload failed');
-    final dynamic ref = _decode(await _send('GET', '$base/git/ref/heads/$branch'));
+    final dynamic ref = _decode(await _send('GET', '$base/git/ref/heads/$target'));
     if (ref is! Map) throw ApiException(500, 'Could not read branch');
     final String commitSha = (ref['object'] as Map)['sha'].toString();
     final dynamic commit = _decode(await _send('GET', '$base/git/commits/$commitSha'));
@@ -421,18 +459,46 @@ class GitHubApi {
     if (newCommit is! Map) throw ApiException(500, 'Commit creation failed');
     _decode(await _send(
       'PATCH',
-      '$base/git/refs/heads/$branch',
+      '$base/git/refs/heads/$target',
       jsonBody: <String, dynamic>{'sha': newCommit['sha']},
     ));
   }
 
   // ---------------------------------------------------------------- actions
   Future<void> dispatch(String owner, String repo, String workflow, {Map<String, String> inputs = const <String, String>{}}) async {
+    final String ref = await defaultBranchOf(owner, repo);
     _decode(await _send(
       'POST',
       '${AppConfig.githubApi}/repos/$owner/$repo/actions/workflows/$workflow/dispatches',
-      jsonBody: <String, dynamic>{'ref': 'main', 'inputs': inputs},
+      jsonBody: <String, dynamic>{'ref': ref, 'inputs': inputs},
     ));
+  }
+
+  /// The repository's real default branch, cached for the session.
+  Future<String> defaultBranchOf(String owner, String repo) async {
+    final String key = '$owner/$repo';
+    final String? cached = _defaultBranches[key];
+    if (cached != null && cached.isNotEmpty) return cached;
+    try {
+      final dynamic data = _decode(await _send('GET', '${AppConfig.githubApi}/repos/$owner/$repo'));
+      if (data is Map) {
+        final String branch = data['default_branch']?.toString() ?? '';
+        if (branch.isNotEmpty) {
+          _defaultBranches[key] = branch;
+          return branch;
+        }
+      }
+    } on ApiException catch (error) {
+      if (error.status == 404) {
+        throw ApiException(404, 'Repository $key was not found, or the GitHub App is not installed on it.');
+      }
+      rethrow;
+    }
+    return 'main';
+  }
+
+  void rememberBranch(String owner, String repo, String branch) {
+    if (branch.trim().isNotEmpty) _defaultBranches['$owner/$repo'] = branch.trim();
   }
 
   Future<List<WorkflowRun>> listRuns(String owner, String repo, {String? workflow}) async {
@@ -558,21 +624,52 @@ class GitHubApi {
 
   /// Encrypts with the repository public key using libsodium's sealed box
   /// scheme (X25519 + XSalsa20-Poly1305), exactly what the Actions API expects.
-  Future<void> putSecret(String owner, String repo, String name, String value) async {
-    final dynamic keyData = _decode(await _send('GET', '${AppConfig.githubApi}/repos/$owner/$repo/actions/secrets/public-key'));
+  ///
+  /// The write is verified: the secret list is re-read and the name must be
+  /// present before this returns. GitHub only returns 201/204 for a successful
+  /// write, so an unverifiable write is reported as a failure instead of a
+  /// silent "saved".
+  Future<SecretWriteResult> putSecret(String owner, String repo, String name, String value) async {
+    if (value.trim().isEmpty) {
+      throw ApiException(400, 'The secret value is empty');
+    }
+    dynamic keyData;
+    try {
+      keyData = _decode(await _send('GET', '${AppConfig.githubApi}/repos/$owner/$repo/actions/secrets/public-key'));
+    } on ApiException catch (error) {
+      if (error.status == 403) {
+        throw ApiException(403, 'The GitHub App needs the “Secrets: write” permission for this repository.');
+      }
+      rethrow;
+    }
     if (keyData is! Map) throw ApiException(500, 'Missing public key');
-    final String keyId = keyData['key_id'].toString();
-    final Uint8List publicKey = Uint8List.fromList(base64Decode(keyData['key'].toString()));
+    final String? keyId = keyData['key_id']?.toString();
+    final String? encodedKey = keyData['key']?.toString();
+    if (keyId == null || encodedKey == null) throw ApiException(500, 'Malformed public key response');
+    final Uint8List publicKey;
+    try {
+      publicKey = Uint8List.fromList(base64Decode(encodedKey));
+    } catch (_) {
+      throw ApiException(500, 'The repository public key is not valid base64');
+    }
     if (publicKey.length != 32) throw ApiException(500, 'Invalid repository public key');
     final Uint8List sealed = SealedBox(PublicKey(publicKey)).encrypt(Uint8List.fromList(utf8.encode(value)));
-    _decode(await _send(
+    final http.Response response = await _send(
       'PUT',
       '${AppConfig.githubApi}/repos/$owner/$repo/actions/secrets/$name',
       jsonBody: <String, dynamic>{
         'encrypted_value': base64Encode(sealed),
         'key_id': keyId,
       },
-    ));
+    );
+    if (response.statusCode != 201 && response.statusCode != 204) {
+      _throwFor(response);
+    }
+    final List<String> names = await listSecretNames(owner, repo);
+    if (!names.contains(name)) {
+      throw ApiException(500, 'GitHub accepted the request but the secret is not listed; check the App permissions.');
+    }
+    return SecretWriteResult(name: name, keyId: keyId, verified: true);
   }
 
   String _cleanPath(String path) {

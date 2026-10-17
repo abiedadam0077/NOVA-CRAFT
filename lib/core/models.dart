@@ -606,6 +606,10 @@ class ServerRuntime {
     this.cycleStartedAt = '',
     this.gamePort,
     this.rssMb,
+    this.tunnelName = '',
+    this.tunnelProtocol = '',
+    this.tunnelOfflineReasons = const <String>[],
+    this.agentId = '',
   });
 
   final String phase; // starting | ready | stopping | stopped | failed | unknown
@@ -627,6 +631,10 @@ class ServerRuntime {
   final String cycleStartedAt;
   final int? gamePort;
   final int? rssMb;
+  final String tunnelName;
+  final String tunnelProtocol;
+  final List<String> tunnelOfflineReasons;
+  final String agentId;
 
   DateTime? get updatedAtDate => DateTime.tryParse(updatedAt)?.toLocal();
 
@@ -665,6 +673,10 @@ class ServerRuntime {
       cycleStartedAt: o['cycleStartedAt']?.toString() ?? '',
       gamePort: numOrNull('gamePort'),
       rssMb: numOrNull('rssMb'),
+      tunnelName: o['tunnelName']?.toString() ?? '',
+      tunnelProtocol: o['tunnelProtocol']?.toString() ?? '',
+      tunnelOfflineReasons: (o['tunnelOfflineReasons'] as List?)?.map((dynamic e) => e.toString()).toList() ?? const <String>[],
+      agentId: o['agentId']?.toString() ?? '',
     );
   }
 }
@@ -713,6 +725,15 @@ class ResolvedDownload {
   final String sha;
   final int javaMajor;
   final String label;
+}
+
+/// Outcome of a repository secret write.
+class SecretWriteResult {
+  const SecretWriteResult({required this.name, required this.keyId, required this.verified});
+
+  final String name;
+  final String keyId;
+  final bool verified;
 }
 
 class ApiException implements Exception {

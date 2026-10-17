@@ -1,24 +1,75 @@
+import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
-import 'package:flutter/services.dart';
-import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/formatters.dart';
 import '../../core/models.dart';
+import '../../core/provisioner.dart';
 import '../../core/strings.dart';
 import '../../design/theme.dart';
 import '../../design/tokens.dart';
 import '../../design/widgets/buttons.dart';
+import '../../design/widgets/display.dart';
 import '../../design/widgets/feedback.dart';
 import '../../design/widgets/inputs.dart';
 import '../../design/widgets/surfaces.dart';
 import '../../state/app_state.dart';
 
-const Set<String> _textExtensions = <String>{
-  'txt', 'properties', 'yml', 'yaml', 'json', 'toml', 'cfg', 'conf', 'ini', 'log',
-  'md', 'sh', 'bat', 'xml', 'html', 'css', 'js', 'ts', 'py', 'java', 'kt', 'dart',
-  'csv', 'mcmeta', 'snbt', 'list', 'env', 'gitignore',
-};
+/// One entry of the runner's file manifest.
+class ServerFileEntry {
+  const ServerFileEntry({required this.path, required this.size, required this.modified, required this.isDir});
+
+  final String path;
+  final int size;
+  final DateTime? modified;
+  final bool isDir;
+
+  String get name => path.contains('/') ? path.split('/').last : path;
+
+  factory ServerFileEntry.fromJson(Map<String, dynamic> o, {required bool isDir}) => ServerFileEntry(
+        path: o['path']?.toString() ?? '',
+        size: (o['size'] as num?)?.toInt() ?? 0,
+        modified: DateTime.tryParse(o['modified']?.toString() ?? '')?.toLocal() ??
+            ((o['modified'] is num)
+                ? DateTime.fromMillisecondsSinceEpoch(((o['modified'] as num).toInt()) * 1000)
+                : null),
+        isDir: isDir,
+      );
+}
+
+/// Parsed `nova-craft/files/manifest.json`.
+class ServerFileManifest {
+  const ServerFileManifest({required this.entries, required this.generatedAt, this.truncated = false});
+
+  final List<ServerFileEntry> entries;
+  final DateTime? generatedAt;
+  final bool truncated;
+
+  bool get isEmpty => entries.isEmpty;
+
+  static ServerFileManifest fromJson(Map<String, dynamic> o) {
+    final List<ServerFileEntry> entries = <ServerFileEntry>[];
+    for (final dynamic raw in (o['dirs'] as List? ?? <dynamic>[])) {
+      if (raw is String) {
+        entries.add(ServerFileEntry(path: raw, size: 0, modified: null, isDir: true));
+      }
+    }
+    for (final dynamic raw in (o['files'] as List? ?? <dynamic>[])) {
+      if (raw is Map) {
+        entries.add(ServerFileEntry.fromJson(Map<String, dynamic>.from(raw), isDir: false));
+      }
+    }
+    entries.sort((ServerFileEntry a, ServerFileEntry b) => a.path.compareTo(b.path));
+    final dynamic stamp = o['generatedAt'];
+    return ServerFileManifest(
+      entries: entries,
+      generatedAt: stamp == null ? null : DateTime.tryParse(stamp.toString())?.toLocal(),
+      truncated: o['truncated'] == true,
+    );
+  }
+}
 
 class FilesScreen extends StatelessWidget {
   const FilesScreen({super.key, required this.active, required this.onPickServer});
@@ -28,14 +79,13 @@ class FilesScreen extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final AppState state = AppScope.of(context);
-    final ServerConfig? server = state.selected;
+    final ServerConfig? server = AppScope.of(context).selected;
     if (server == null) {
       return SafeArea(
         bottom: false,
         child: EmptyState(
-          title: L10n.t('noServerSelected'),
-          body: L10n.t('emptyFilesTitle'),
+          title: L10n.t('noServersYet'),
+          body: L10n.t('firstServerBody'),
           icon: Icons.folder_copy_rounded,
           actionLabel: L10n.t('homeServerSwitcher'),
           onAction: onPickServer,
@@ -45,305 +95,266 @@ class FilesScreen extends StatelessWidget {
     }
     return SafeArea(
       bottom: false,
-      child: FileBrowser(config: server, active: active),
+      child: ServerFilesView(config: server, active: active),
     );
   }
 }
 
-class FileBrowser extends StatefulWidget {
-  const FileBrowser({
-    super.key,
-    required this.config,
-    this.active = true,
-    this.embedded = false,
-  });
+/// Server-data-only file browser.
+///
+/// Everything shown here comes from `nova-craft/files/manifest.json`, which the
+/// runner generates from the real server data folder on the runner. Repository
+/// files (workflow YAML, source code, credentials) can never appear because the
+/// runner never lists them, and every write request is applied by the runner
+/// through `fileops.py`, which rejects paths outside the data root.
+class ServerFilesView extends StatefulWidget {
+  const ServerFilesView({super.key, required this.config, this.active = true});
 
   final ServerConfig config;
   final bool active;
-  final bool embedded;
 
   @override
-  State<FileBrowser> createState() => _FileBrowserState();
+  State<ServerFilesView> createState() => _ServerFilesViewState();
 }
 
-class _FileBrowserState extends State<FileBrowser> {
+class _ServerFilesViewState extends State<ServerFilesView> {
   final TextEditingController _search = TextEditingController();
-  final TextEditingController _newName = TextEditingController();
-
   String _path = '';
-  List<DirEntry> _entries = <DirEntry>[];
+  String _sort = 'name';
+  bool _ascending = true;
+
+  ServerFileManifest? _manifest;
+  Map<String, String> _snapshot = <String, String>{}; // path -> base64 contents
   bool _loading = true;
   String? _error;
-  String _sort = 'name';
-  String _branch = 'main';
-  String? _busyPath;
-  DateTime? _loadedAt;
-  final Map<String, DateTime?> _dates = <String, DateTime?>{};
-  bool _loadingDates = false;
+  bool _busy = false;
 
   @override
   void initState() {
     super.initState();
-    // The browser is rooted at the server data folder. Repository files can
-    // never be listed, opened or written through this screen.
-    _path = widget.config.serverRoot;
-    WidgetsBinding.instance.addPostFrameCallback((_) => _init());
+    WidgetsBinding.instance.addPostFrameCallback((_) => _load());
   }
 
-  String get _root => widget.config.serverRoot;
-
-  bool _insideRoot(String path) => path == _root || path.startsWith('$_root/');
-
   @override
-  void didUpdateWidget(FileBrowser oldWidget) {
+  void didUpdateWidget(covariant ServerFilesView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (!oldWidget.active && widget.active) {
-      final DateTime? at = _loadedAt;
-      if (at == null || DateTime.now().difference(at).inSeconds > 20) _load();
-    }
+    if (oldWidget.active != widget.active && widget.active && _manifest == null) _load();
   }
 
   @override
   void dispose() {
     _search.dispose();
-    _newName.dispose();
     super.dispose();
   }
 
-  Future<void> _init() async {
-    final AppState state = AppScope.read(context);
-    try {
-      final GhRepo repo = await state.api.getRepo(widget.config.repoOwner, widget.config.repoName);
-      _branch = repo.defaultBranch.isEmpty ? 'main' : repo.defaultBranch;
-    } catch (_) {
-      _branch = 'main';
-    }
-    if (!mounted) return;
-    await _load();
-  }
-
-  Future<void> _load() async {
+  Future<void> _load({bool withSnapshot = false}) async {
     setState(() {
-      _loading = true;
+      _loading = _manifest == null;
       _error = null;
     });
+    final AppState state = AppScope.read(context);
     try {
-      final AppState state = AppScope.read(context);
-      final List<DirEntry> entries = await state.api.listDir(widget.config.repoOwner, widget.config.repoName, _path);
+      final String text = await state.api.getFileText(widget.config.repoOwner, widget.config.repoName, Provisioner.manifestPath);
+      final dynamic decoded = jsonDecode(text);
+      if (decoded is! Map) throw ApiException(500, L10n.t('filesUnavailableShort'));
+      final ServerFileManifest manifest = ServerFileManifest.fromJson(Map<String, dynamic>.from(decoded));
+      Map<String, String> snapshot = _snapshot;
+      if (withSnapshot || snapshot.isEmpty) {
+        snapshot = await _readSnapshot();
+      }
       if (!mounted) return;
       setState(() {
-        _entries = entries;
-        _loadedAt = DateTime.now();
-        _dates.clear();
+        _manifest = manifest;
+        _snapshot = snapshot;
+        _loading = false;
+      });
+    } on ApiException catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _error = error.status == 404 ? L10n.t('filesNoManifestYet') : Fmt.error(error);
+        _loading = false;
       });
     } catch (error) {
       if (!mounted) return;
-      setState(() => _error = Fmt.error(error));
-    } finally {
-      if (mounted) setState(() => _loading = false);
+      setState(() {
+        _error = Fmt.error(error);
+        _loading = false;
+      });
     }
   }
 
-  Future<void> _loadDatesIfNeeded() async {
-    if (_loadingDates) return;
-    final List<DirEntry> missing = _entries.where((DirEntry e) => !_dates.containsKey(e.path)).toList();
-    if (missing.isEmpty) return;
-    _loadingDates = true;
+  Future<Map<String, String>> _readSnapshot() async {
     final AppState state = AppScope.read(context);
-    for (final DirEntry entry in missing) {
-      final DateTime? date = await state.api.lastCommitDate(
-        widget.config.repoOwner,
-        widget.config.repoName,
-        entry.path,
-        branch: _branch,
-      );
-      if (!mounted) return;
-      _dates[entry.path] = date;
-    }
-    if (mounted) {
-      setState(() => _loadingDates = false);
-    } else {
-      _loadingDates = false;
-    }
-  }
-
-  void _navigate(String path) {
-    if (!_insideRoot(path)) {
-      showNovaToast(context, L10n.t('pathOutsideRoot'), kind: ToastKind.error);
-      return;
-    }
-    setState(() => _path = path);
-    _load();
-  }
-
-  List<DirEntry> get _visible {
-    final String q = _search.text.trim().toLowerCase();
-    final List<DirEntry> out = _entries.where((DirEntry e) => q.isEmpty || e.name.toLowerCase().contains(q)).toList();
-    out.sort((DirEntry a, DirEntry b) {
-      if (_sort == 'size') return b.size.compareTo(a.size);
-      if (_sort == 'date') {
-        final DateTime? da = _dates[a.path];
-        final DateTime? db = _dates[b.path];
-        if (da == null && db == null) return a.name.toLowerCase().compareTo(b.name.toLowerCase());
-        if (da == null) return 1;
-        if (db == null) return -1;
-        return db.compareTo(da);
+    try {
+      final String text = await state.api.getFileText(widget.config.repoOwner, widget.config.repoName, 'nova-craft/snapshot.json');
+      final dynamic decoded = jsonDecode(text);
+      if (decoded is Map && decoded['files'] is Map) {
+        final Map<String, String> out = <String, String>{};
+        (decoded['files'] as Map).forEach((dynamic key, dynamic value) {
+          out[key.toString()] = value.toString();
+        });
+        return out;
       }
+    } catch (_) {
+      // No snapshot yet (fresh server) — editing stays unavailable until the
+      // runner publishes one, and the UI says so.
+    }
+    return <String, String>{};
+  }
+
+  List<ServerFileEntry> get _children {
+    final String prefix = _path.isEmpty ? '' : '$_path/';
+    final Map<String, ServerFileEntry> seen = <String, ServerFileEntry>{};
+    for (final ServerFileEntry entry in _manifest?.entries ?? <ServerFileEntry>[]) {
+      if (!entry.path.startsWith(prefix) || entry.path == _path) continue;
+      final String remainder = entry.path.substring(prefix.length);
+      if (remainder.isEmpty) continue;
+      final int slash = remainder.indexOf('/');
+      if (slash < 0) {
+        seen[entry.path] = entry;
+      } else {
+        final String dir = '$prefix${remainder.substring(0, slash)}';
+        seen.putIfAbsent(dir, () => ServerFileEntry(path: dir, size: 0, modified: null, isDir: true));
+      }
+    }
+    final List<ServerFileEntry> list = seen.values.toList();
+    final String query = _search.text.trim().toLowerCase();
+    list.removeWhere((ServerFileEntry e) => query.isNotEmpty && !e.name.toLowerCase().contains(query));
+    list.sort((ServerFileEntry a, ServerFileEntry b) {
       if (a.isDir != b.isDir) return a.isDir ? -1 : 1;
-      return a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      int value;
+      switch (_sort) {
+        case 'size':
+          value = a.size.compareTo(b.size);
+          break;
+        case 'date':
+          final DateTime x = a.modified ?? DateTime.fromMillisecondsSinceEpoch(0);
+          final DateTime y = b.modified ?? DateTime.fromMillisecondsSinceEpoch(0);
+          value = x.compareTo(y);
+          break;
+        default:
+          value = a.name.toLowerCase().compareTo(b.name.toLowerCase());
+      }
+      return _ascending ? value : -value;
     });
-    return out;
+    return list;
   }
 
-  List<String> get _breadcrumbs {
-    if (_path == _root) return <String>[];
-    final String relative = _path.substring((_root.length + 1).clamp(0, _path.length));
-    return relative.isEmpty ? <String>[] : relative.split('/');
+  bool _isText(String path) {
+    final int dot = path.lastIndexOf('.');
+    if (dot < 0) return false;
+    const Set<String> textExtensions = <String>{
+      'txt', 'properties', 'json', 'yml', 'yaml', 'toml', 'cfg', 'conf', 'ini', 'log',
+      'md', 'sh', 'xml', 'csv', 'mcmeta', 'snbt', 'list', 'html', 'js', 'py', 'java',
+    };
+    final String ext = path.substring(dot + 1).toLowerCase();
+    return textExtensions.contains(ext);
   }
 
-  String _pathUpTo(int index) => '$_root/${_breadcrumbs.take(index + 1).join('/')}';
-
-  String _iconFor(String name) {
-    final int dot = name.lastIndexOf('.');
-    final String ext = dot >= 0 ? name.substring(dot + 1).toLowerCase() : '';
-    switch (ext) {
-      case 'json':
-      case 'yml':
-      case 'yaml':
-      case 'properties':
-      case 'toml':
-        return 'config';
-      case 'jar':
-        return 'jar';
-      case 'zip':
-      case 'gz':
-      case 'tar':
-        return 'zip';
-      case 'png':
-      case 'jpg':
-      case 'jpeg':
-      case 'webp':
-        return 'image';
-      case 'log':
-      case 'txt':
-        return 'text';
-      default:
-        return 'file';
+  String _decodeContent(String base64Text) {
+    try {
+      return utf8.decode(base64Decode(base64Text), allowMalformed: true);
+    } catch (_) {
+      return '';
     }
   }
 
-  _FileStyle _styleFor(DirEntry entry) {
-    final p = context.nova;
-    if (entry.isDir) return _FileStyle(Icons.folder_rounded, p.warning);
-    switch (_iconFor(entry.name)) {
-      case 'config':
-        return _FileStyle(Icons.tune_rounded, p.cyan);
-      case 'jar':
-        return _FileStyle(Icons.extension_rounded, p.violet);
-      case 'zip':
-        return _FileStyle(Icons.archive_rounded, p.warning);
-      case 'image':
-        return _FileStyle(Icons.image_rounded, p.successBright);
-      case 'text':
-        return _FileStyle(Icons.description_rounded, p.primaryBright);
-      default:
-        return _FileStyle(Icons.insert_drive_file_rounded, p.textMuted);
-    }
-  }
-
-  bool _isText(DirEntry entry) {
-    final int dot = entry.name.lastIndexOf('.');
-    final String ext = dot >= 0 ? entry.name.substring(dot + 1).toLowerCase() : '';
-    if (_textExtensions.contains(ext)) return true;
-    if (entry.name == 'eula.txt' || entry.name == 'server.properties') return true;
-    return false;
-  }
-
-  Future<void> _open(DirEntry entry) async {
+  Future<void> _openEntry(ServerFileEntry entry) async {
     if (entry.isDir) {
-      _navigate(entry.path);
+      setState(() => _path = entry.path);
       return;
     }
-    if (_isText(entry) && entry.size <= 900000) {
-      _edit(entry);
+    if (!_isText(entry.path)) {
+      showNovaToast(context, L10n.t('filesBinaryNote'), kind: ToastKind.info);
       return;
     }
-    await _openExternal(entry);
+    await _openEditor(entry.path, entry.name);
   }
 
-  /// Saves the real file bytes to a location the user picks. This never
-  /// fabricates content: if the file is too large for the contents API the app
-  /// says so instead of producing a truncated file.
-  Future<void> _download(DirEntry entry) async {
-    if (entry.size > 20 * 1024 * 1024) {
-      showNovaToast(context, L10n.t('fileTooLarge'), kind: ToastKind.error);
+  Future<void> _openEditor(String path, String name) async {
+    final String? encoded = _snapshot[path];
+    if (encoded == null) {
+      final bool live = await _requestRead(path, name);
+      if (!live) {
+        showNovaToast(context, L10n.t('filesOfflineSnapshotNote'), kind: ToastKind.warning);
+      }
       return;
     }
-    setState(() => _busyPath = entry.path);
-    try {
-      final AppState state = AppScope.read(context);
-      final Uint8List bytes = await state.api.getFileBytes(widget.config.repoOwner, widget.config.repoName, entry.path);
-      if (!mounted) return;
-      final String? target = await FilePicker.platform.saveFile(
-        dialogTitle: entry.name,
-        fileName: entry.name,
-        bytes: bytes,
-      );
-      if (!mounted) return;
-      if (target == null) return;
-      showNovaToast(context, L10n.t('downloadedFile'), kind: ToastKind.success);
-    } catch (error) {
-      if (!mounted) return;
-      showNovaToast(context, Fmt.error(error), kind: ToastKind.error);
-    } finally {
-      if (mounted) setState(() => _busyPath = null);
-    }
-  }
-
-  Future<void> _openExternal(DirEntry entry) async {
-    final String url = entry.downloadUrl ?? 'https://github.com/${widget.config.repoFull}/blob/$_branch/${entry.path}';
-    final bool ok = await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-    if (!ok && mounted) {
-      showNovaToast(context, L10n.t('errorGeneric'), kind: ToastKind.error);
-    }
-  }
-
-  Future<void> _edit(DirEntry entry) async {
-    final AppState state = AppScope.read(context);
-    setState(() => _busyPath = entry.path);
-    try {
-      final String text = await state.api.getFileText(widget.config.repoOwner, widget.config.repoName, entry.path);
-      if (!mounted) return;
-      final String? next = await Navigator.of(context).push<String>(MaterialPageRoute<String>(
+    final String initial = _decodeContent(encoded);
+    if (!mounted) return;
+    final String? next = await Navigator.of(context).push<String>(
+      MaterialPageRoute<String>(
         builder: (_) => FileEditorScreen(
-          title: entry.name,
-          path: entry.path,
-          initialText: text,
+          title: name,
+          path: path,
+          initialText: initial,
+          project: widget.config,
+          readOnly: false,
         ),
-      ));
-      if (next == null || !mounted) return;
-      final String? sha = await state.api.fileSha(widget.config.repoOwner, widget.config.repoName, entry.path);
+      ),
+    );
+    if (next == null || !mounted) return;
+    await _saveSnapshotFile(path, next);
+  }
+
+  /// While the server runs, the runner can read a file immediately.
+  Future<bool> _requestRead(String path, String name) async {
+    final AppState state = AppScope.read(context);
+    setState(() => _busy = true);
+    try {
+      await Provisioner.queueFileOp(state.api, widget.config, <String, dynamic>{'op': 'read', 'path': path});
+      if (!mounted) return true;
+      showNovaToast(context, L10n.t('fileReadQueued'), kind: ToastKind.success);
+      return true;
+    } catch (error) {
+      if (mounted) showNovaToast(context, Fmt.error(error), kind: ToastKind.error);
+      return true;
+    } finally {
+      if (mounted) setState(() => _busy = false);
+    }
+  }
+
+  /// Stopped-server edits go through the published snapshot, which the runner
+  /// re-applies before the next start.
+  Future<void> _saveSnapshotFile(String path, String content) async {
+    final AppState state = AppScope.read(context);
+    setState(() => _busy = true);
+    try {
+      final String? sha = await state.api.fileSha(widget.config.repoOwner, widget.config.repoName, 'nova-craft/snapshot.json');
+      final Map<String, dynamic> payload = <String, dynamic>{
+        'schema': 1,
+        'generatedAt': DateTime.now().toUtc().toIso8601String(),
+        'truncated': false,
+        'files': <String, String>{
+          ..._snapshot,
+          path: base64Encode(utf8.encode(content)),
+        },
+      };
       await state.api.putText(
         widget.config.repoOwner,
         widget.config.repoName,
-        entry.path,
-        next,
-        'nova: edit ${entry.name}',
+        'nova-craft/snapshot.json',
+        jsonEncode(payload),
+        'nova: edit $path',
         sha: sha,
-        branch: _branch,
       );
+      // The runner applies the same file immediately when it is running.
+      await Provisioner.queueFileOp(state.api, widget.config, <String, dynamic>{
+        'op': 'write',
+        'path': path,
+        'content': base64Encode(utf8.encode(content)),
+      });
       if (!mounted) return;
+      setState(() => _snapshot = <String, String>{..._snapshot, path: base64Encode(utf8.encode(content))});
       showNovaToast(context, L10n.t('savedFile'), kind: ToastKind.success);
-      await _load();
     } catch (error) {
-      if (!mounted) return;
-      showNovaToast(context, Fmt.error(error), kind: ToastKind.error);
+      if (mounted) showNovaToast(context, Fmt.error(error), kind: ToastKind.error);
     } finally {
-      if (mounted) setState(() => _busyPath = null);
+      if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _delete(DirEntry entry) async {
+  Future<void> _delete(ServerFileEntry entry) async {
     final bool ok = await showNovaConfirm(
       context,
       title: L10n.t('deleteFileTitle'),
@@ -353,26 +364,59 @@ class _FileBrowserState extends State<FileBrowser> {
       icon: Icons.delete_forever_rounded,
     );
     if (!ok || !mounted) return;
-    setState(() => _busyPath = entry.path);
-    try {
-      final AppState state = AppScope.read(context);
-      await state.api.deleteFile(
-        widget.config.repoOwner,
-        widget.config.repoName,
-        entry.path,
-        entry.sha,
-        'nova: delete ${entry.path}',
-        branch: _branch,
-      );
-      if (!mounted) return;
-      showNovaToast(context, L10n.t('backupDeleted'), kind: ToastKind.success);
-      await _load();
-    } catch (error) {
-      if (!mounted) return;
-      showNovaToast(context, Fmt.error(error), kind: ToastKind.error);
-    } finally {
-      if (mounted) setState(() => _busyPath = null);
-    }
+    await _queue(<String, dynamic>{'op': 'delete', 'path': entry.path});
+  }
+
+  Future<void> _rename(ServerFileEntry entry) async {
+    final TextEditingController controller = TextEditingController(text: entry.name);
+    final String? next = await showDialog<String>(
+      context: context,
+      builder: (BuildContext ctx) {
+        final p = ctx.nova;
+        return AlertDialog(
+          backgroundColor: p.cardHigh,
+          shape: RoundedRectangleBorder(borderRadius: NovaRadii.rLg),
+          title: Text(L10n.t('rename'), style: NovaTextStyles.title(p.text)),
+          content: NovaField(controller: controller, autofocus: true),
+          actions: <Widget>[
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: Text(L10n.t('cancel'))),
+            TextButton(onPressed: () => Navigator.of(ctx).pop(controller.text.trim()), child: Text(L10n.t('save'))),
+          ],
+        );
+      },
+    );
+    final String parent = entry.path.contains('/') ? entry.path.substring(0, entry.path.lastIndexOf('/')) : '';
+    if (next == null || next.isEmpty || next == entry.name || !mounted) return;
+    await _queue(<String, dynamic>{
+      'op': 'rename',
+      'path': entry.path,
+      'dest': parent.isEmpty ? next : '$parent/$next',
+    });
+  }
+
+  Future<void> _newFolder() async {
+    final TextEditingController controller = TextEditingController();
+    final String? name = await showDialog<String>(
+      context: context,
+      builder: (BuildContext ctx) {
+        final p = ctx.nova;
+        return AlertDialog(
+          backgroundColor: p.cardHigh,
+          shape: RoundedRectangleBorder(borderRadius: NovaRadii.rLg),
+          title: Text(L10n.t('newFolder'), style: NovaTextStyles.title(p.text)),
+          content: NovaField(controller: controller, autofocus: true, hint: 'config'),
+          actions: <Widget>[
+            TextButton(onPressed: () => Navigator.of(ctx).pop(), child: Text(L10n.t('cancel'))),
+            TextButton(onPressed: () => Navigator.of(ctx).pop(controller.text.trim()), child: Text(L10n.t('save'))),
+          ],
+        );
+      },
+    );
+    if (name == null || name.isEmpty || !mounted) return;
+    await _queue(<String, dynamic>{
+      'op': 'mkdir',
+      'path': _path.isEmpty ? name : '$_path/$name',
+    });
   }
 
   Future<void> _upload() async {
@@ -384,388 +428,244 @@ class _FileBrowserState extends State<FileBrowser> {
       showNovaToast(context, L10n.t('fileTooLarge'), kind: ToastKind.error);
       return;
     }
-    if (bytes.length > 30 * 1024 * 1024) {
+    if (bytes.length > 20 * 1024 * 1024) {
       showNovaToast(context, L10n.t('fileTooLarge'), kind: ToastKind.error);
       return;
     }
-    final String target = '$_path/${file.name}';
-    setState(() => _busyPath = target);
+    final String target = _path.isEmpty ? file.name : '$_path/${file.name}';
+    await _queue(<String, dynamic>{
+      'op': 'write',
+      'path': target,
+      'content': base64Encode(bytes),
+    });
+  }
+
+  Future<void> _queue(Map<String, dynamic> op) async {
+    final AppState state = AppScope.read(context);
+    setState(() => _busy = true);
     try {
-      final AppState state = AppScope.read(context);
-      final String? sha = await state.api.fileSha(widget.config.repoOwner, widget.config.repoName, target);
-      await state.api.putFile(
-        widget.config.repoOwner,
-        widget.config.repoName,
-        target,
-        bytes,
-        'nova: upload ${file.name}',
-        sha: sha,
-        branch: _branch,
-      );
+      await Provisioner.queueFileOp(state.api, widget.config, op);
       if (!mounted) return;
-      showNovaToast(context, L10n.t('uploadedFile'), kind: ToastKind.success);
-      await _load();
+      showNovaToast(context, L10n.t('fileOpQueued'), kind: ToastKind.success);
+      await _load(withSnapshot: true);
     } catch (error) {
-      if (!mounted) return;
-      showNovaToast(context, Fmt.error(error), kind: ToastKind.error);
+      if (mounted) showNovaToast(context, Fmt.error(error), kind: ToastKind.error);
     } finally {
-      if (mounted) setState(() => _busyPath = null);
+      if (mounted) setState(() => _busy = false);
     }
   }
 
-  Future<void> _create(bool folder) async {
-    _newName.clear();
-    final bool? ok = await showDialog<bool>(
-      context: context,
-      builder: (BuildContext ctx) {
-        final p = ctx.nova;
-        return AlertDialog(
-          backgroundColor: p.cardHigh,
-          shape: RoundedRectangleBorder(borderRadius: NovaRadii.rLg),
-          title: Text(folder ? L10n.t('newFolder') : L10n.t('newFile'), style: NovaTextStyles.title(p.text)),
-          content: NovaField(
-            controller: _newName,
-            autofocus: true,
-            hint: folder ? 'new-folder' : 'notes.txt',
-            prefixIcon: folder ? Icons.create_new_folder_rounded : Icons.note_add_rounded,
-          ),
-          actions: <Widget>[
-            TextButton(onPressed: () => Navigator.of(ctx).pop(false), child: Text(L10n.t('cancel'))),
-            TextButton(onPressed: () => Navigator.of(ctx).pop(true), child: Text(L10n.t('save'))),
-          ],
-        );
-      },
-    );
-    final String name = _newName.text.trim();
-    if (ok != true || name.isEmpty || !mounted) return;
-    final String target = folder ? '$_path/$name/.gitkeep' : '$_path/$name';
-    setState(() => _busyPath = target);
-    try {
-      final AppState state = AppScope.read(context);
-      await state.api.putText(
-        widget.config.repoOwner,
-        widget.config.repoName,
-        target,
-        folder ? '' : '',
-        folder ? 'nova: new folder' : 'nova: new file',
-        sha: await state.api.fileSha(widget.config.repoOwner, widget.config.repoName, target),
-        branch: _branch,
-      );
-      if (!mounted) return;
-      showNovaToast(context, L10n.t('savedFile'), kind: ToastKind.success);
-      await _load();
-    } catch (error) {
-      if (!mounted) return;
-      showNovaToast(context, Fmt.error(error), kind: ToastKind.error);
-    } finally {
-      if (mounted) setState(() => _busyPath = null);
-    }
-  }
-
-  Future<void> _showActions(DirEntry entry) async {
+  Future<void> _showDetails(ServerFileEntry entry) async {
     final p = context.nova;
     await showModalBottomSheet<void>(
       context: context,
       backgroundColor: Colors.transparent,
-      builder: (BuildContext ctx) {
-        return Container(
-          padding: const EdgeInsets.fromLTRB(20, 10, 20, 24),
-          decoration: BoxDecoration(
-            color: p.surface,
-            borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
-            border: Border(top: BorderSide(color: p.stroke)),
-          ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Container(width: 38, height: 4, decoration: BoxDecoration(color: p.strokeStrong, borderRadius: NovaRadii.rPill)),
-              const SizedBox(height: 16),
-              Row(
-                children: <Widget>[
-                  Icon(_styleFor(entry).icon, color: _styleFor(entry).color, size: 22),
-                  const SizedBox(width: 10),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: <Widget>[
-                        Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: NovaTextStyles.title(p.text)),
-                        Text(
-                          entry.isDir ? L10n.t('fileType') : Fmt.bytes(entry.size),
-                          style: NovaTextStyles.small(p.textDim),
-                        ),
-                      ],
-                    ),
+      builder: (BuildContext ctx) => Container(
+        padding: const EdgeInsets.fromLTRB(20, 12, 20, 24),
+        decoration: BoxDecoration(
+          color: p.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+          border: Border(top: BorderSide(color: p.stroke)),
+        ),
+        child: Column(
+          mainAxisSize: MainAxisSize.min,
+          crossAxisAlignment: CrossAxisAlignment.stretch,
+          children: <Widget>[
+            Center(child: Container(width: 38, height: 4, decoration: BoxDecoration(color: p.strokeStrong, borderRadius: NovaRadii.rPill))),
+            const SizedBox(height: 16),
+            Row(
+              children: <Widget>[
+                Icon(entry.isDir ? Icons.folder_rounded : Icons.description_rounded, color: p.primaryBright),
+                const SizedBox(width: 10),
+                Expanded(child: Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: NovaTextStyles.title(p.text))),
+              ],
+            ),
+            const SizedBox(height: 12),
+            InfoRow(label: L10n.t('pathBreadcrumb'), value: '/${entry.path}', monospace: true),
+            InfoRow(label: L10n.t('fileSize'), value: entry.isDir ? '—' : Fmt.bytes(entry.size)),
+            InfoRow(label: L10n.t('fileModified'), value: Fmt.relative(entry.modified)),
+            const SizedBox(height: 12),
+            if (!entry.isDir)
+              NovaButton(
+                label: L10n.t('fileEdit'),
+                icon: Icons.edit_note_rounded,
+                variant: NovaButtonVariant.secondary,
+                onPressed: () {
+                  Navigator.of(ctx).pop();
+                  _openEntry(entry);
+                },
+              ),
+            const SizedBox(height: 8),
+            Row(
+              children: <Widget>[
+                Expanded(
+                  child: NovaButton(
+                    label: L10n.t('rename'),
+                    icon: Icons.drive_file_rename_outline_rounded,
+                    variant: NovaButtonVariant.ghost,
+                    height: 46,
+                    size: NovaButtonSize.compact,
+                    onPressed: () {
+                      Navigator.of(ctx).pop();
+                      _rename(entry);
+                    },
                   ),
-                ],
-              ),
-              const SizedBox(height: 14),
-              SoftDivider(),
-              if (entry.isFile)
-                _ActionTile(
-                  icon: Icons.edit_note_rounded,
-                  label: L10n.t('fileEdit'),
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    _edit(entry);
-                  },
                 ),
-              if (entry.isFile)
-                _ActionTile(
-                  icon: Icons.download_rounded,
-                  label: L10n.t('download'),
-                  onTap: () {
-                    Navigator.of(ctx).pop();
-                    _download(entry);
-                  },
+                const SizedBox(width: 8),
+                Expanded(
+                  child: NovaButton(
+                    label: L10n.t('delete'),
+                    icon: Icons.delete_outline_rounded,
+                    variant: NovaButtonVariant.danger,
+                    height: 46,
+                    size: NovaButtonSize.compact,
+                    onPressed: () {
+                      Navigator.of(ctx).pop();
+                      _delete(entry);
+                    },
+                  ),
                 ),
-              _ActionTile(
-                icon: Icons.content_copy_rounded,
-                label: L10n.t('copy'),
-                onTap: () {
-                  Navigator.of(ctx).pop();
-                  Clipboard.setData(ClipboardData(text: entry.path));
-                  showNovaToast(context, L10n.t('copied'), kind: ToastKind.success);
-                },
-              ),
-              _ActionTile(
-                icon: Icons.delete_outline_rounded,
-                label: L10n.t('delete'),
-                danger: true,
-                onTap: () {
-                  Navigator.of(ctx).pop();
-                  _delete(entry);
-                },
-              ),
-              const SizedBox(height: 8),
-              NovaButton(label: L10n.t('close'), variant: NovaButtonVariant.ghost, onPressed: () => Navigator.of(ctx).pop()),
-            ],
-          ),
-        );
-      },
+              ],
+            ),
+          ],
+        ),
+      ),
     );
   }
 
   @override
   Widget build(BuildContext context) {
     final p = context.nova;
-    final List<DirEntry> visible = _visible;
-    if (_sort == 'date' && !_loadingDates) {
-      WidgetsBinding.instance.addPostFrameCallback((_) => _loadDatesIfNeeded());
-    }
+    final ServerFileManifest? manifest = _manifest;
+    final List<ServerFileEntry> children = _children;
 
-    return RefreshIndicator(
-      color: p.primaryBright,
-      backgroundColor: p.cardHigh,
-      onRefresh: _load,
-      child: ListView(
-        physics: const AlwaysScrollableScrollPhysics(parent: BouncingScrollPhysics()),
-        padding: EdgeInsets.fromLTRB(NovaSpace.page, widget.embedded ? 4 : 10, NovaSpace.page, widget.embedded ? 24 : 130),
-        children: <Widget>[
-          if (!widget.embedded)
-            Row(
-              children: <Widget>[
-                Expanded(
-                  child: Column(
-                    crossAxisAlignment: CrossAxisAlignment.start,
-                    children: <Widget>[
-                      Text(L10n.t('filesTitle'), style: NovaTextStyles.display(26, p.text)),
-                      const SizedBox(height: 2),
-                      Text(widget.config.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: NovaTextStyles.small(p.textMuted)),
-                    ],
-                  ),
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Padding(
+          padding: const EdgeInsets.fromLTRB(NovaSpace.page, 8, NovaSpace.page, 0),
+          child: Row(
+            children: <Widget>[
+              Expanded(
+                child: Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Text(L10n.t('navFiles'), style: NovaTextStyles.heading(22, p.text)),
+                    Text(
+                      manifest?.generatedAt == null
+                          ? L10n.t('filesWaitingForRun')
+                          : L10n.f('filesSyncedAt', <String, String>{'time': Fmt.relative(manifest!.generatedAt)}),
+                      style: NovaTextStyles.caption(p.textDim),
+                    ),
+                  ],
                 ),
-                NovaIconButton(
-                  icon: Icons.create_new_folder_rounded,
-                  tooltip: L10n.t('newFolder'),
-                  onTap: () => _create(true),
-                ),
-                const SizedBox(width: 6),
-                NovaIconButton(
-                  icon: Icons.note_add_rounded,
-                  tooltip: L10n.t('newFile'),
-                  onTap: () => _create(false),
-                ),
-                const SizedBox(width: 6),
-                NovaIconButton(
-                  icon: Icons.upload_rounded,
-                  filled: true,
-                  tooltip: L10n.t('uploadFile'),
-                  onTap: _upload,
-                ),
-              ],
-            ),
-          if (widget.embedded)
-            Row(
-              children: <Widget>[
-                Expanded(child: Text(L10n.t('filesTitle'), style: NovaTextStyles.title(p.text))),
-                NovaIconButton(icon: Icons.create_new_folder_rounded, size: 34, iconSize: 17, tooltip: L10n.t('newFolder'), onTap: () => _create(true)),
-                const SizedBox(width: 4),
-                NovaIconButton(icon: Icons.upload_rounded, size: 34, iconSize: 17, filled: true, tooltip: L10n.t('uploadFile'), onTap: _upload),
-                const SizedBox(width: 4),
-                NovaIconButton(icon: Icons.refresh_rounded, size: 34, iconSize: 17, onTap: _load, tooltip: L10n.t('refresh')),
-              ],
-            ),
-          const SizedBox(height: 10),
-          _Breadcrumbs(
-            repo: widget.config.repoName,
-            segments: _breadcrumbs,
-            onRoot: () => _navigate(widget.config.serverRoot),
-            onSegment: (int i) => _navigate(_pathUpTo(i)),
+              ),
+              if (_busy)
+                const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+              else
+                NovaIconButton(icon: Icons.refresh_rounded, size: 34, iconSize: 17, tooltip: L10n.t('refresh'), onTap: () => _load(withSnapshot: true)),
+              const SizedBox(width: 6),
+              NovaIconButton(icon: Icons.create_new_folder_rounded, size: 34, iconSize: 17, tooltip: L10n.t('newFolder'), onTap: _newFolder),
+              const SizedBox(width: 6),
+              NovaIconButton(icon: Icons.upload_rounded, size: 34, iconSize: 17, filled: true, tooltip: L10n.t('uploadFile'), onTap: _upload),
+            ],
           ),
-          const SizedBox(height: 10),
-          NovaSearchField(
+        ),
+        const SizedBox(height: 10),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: NovaSpace.page),
+          child: NovaSearchField(
             controller: _search,
             hint: L10n.t('searchFiles'),
             onChanged: (_) => setState(() {}),
-            onClear: () => setState(() => _search.clear()),
+            onClear: () => setState(_search.clear),
           ),
-          const SizedBox(height: 6),
-          Row(
-            children: <Widget>[
-              Icon(Icons.info_outline_rounded, size: 12, color: p.textDim),
-              const SizedBox(width: 6),
-              Expanded(child: Text(L10n.t('serverDataOnly'), style: NovaTextStyles.caption(p.textDim))),
-            ],
+        ),
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: NovaSpace.page),
+          child: SingleChildScrollView(
+            scrollDirection: Axis.horizontal,
+            child: Row(
+              children: <Widget>[
+                NovaChip(label: L10n.t('sortName'), selected: _sort == 'name', onTap: () => setState(() => _sort = 'name')),
+                const SizedBox(width: 6),
+                NovaChip(label: L10n.t('fileSize'), selected: _sort == 'size', onTap: () => setState(() => _sort = 'size')),
+                const SizedBox(width: 6),
+                NovaChip(label: L10n.t('fileModified'), selected: _sort == 'date', onTap: () => setState(() => _sort = 'date')),
+                const SizedBox(width: 6),
+                NovaChip(
+                  label: _ascending ? L10n.t('ascending') : L10n.t('descending'),
+                  icon: _ascending ? Icons.arrow_upward_rounded : Icons.arrow_downward_rounded,
+                  onTap: () => setState(() => _ascending = !_ascending),
+                ),
+              ],
+            ),
           ),
-          const SizedBox(height: 8),
-          Row(
-            children: <Widget>[
-              NovaChip(label: L10n.t('sortName'), selected: _sort == 'name', onTap: () => setState(() => _sort = 'name')),
-              const SizedBox(width: 6),
-              NovaChip(label: L10n.t('fileSize'), selected: _sort == 'size', onTap: () => setState(() => _sort = 'size')),
-              const SizedBox(width: 6),
-              NovaChip(label: L10n.t('fileModified'), selected: _sort == 'date', onTap: () => setState(() => _sort = 'date')),
-              const Spacer(),
-              if (_loadingDates)
-                const SizedBox(width: 14, height: 14, child: NovaLoader(size: 14, stroke: 1.6))
-              else
-                Text('${visible.length}', style: NovaTextStyles.caption(p.textDim)),
-            ],
+        ),
+        const SizedBox(height: 8),
+        Padding(
+          padding: const EdgeInsets.symmetric(horizontal: NovaSpace.page),
+          child: _BreadcrumbBar(
+            segments: _path.isEmpty ? <String>[] : _path.split('/'),
+            onRoot: () => setState(() => _path = ''),
+            onSegment: (int i) => setState(() {
+              final List<String> parts = _path.split('/');
+              _path = parts.take(i + 1).join('/');
+            }),
           ),
-          const SizedBox(height: 10),
-          if (_loading && _entries.isEmpty)
-            const SkeletonList(count: 6, cardHeight: 56)
-          else if (_error != null)
-            ErrorState(message: _error!, onRetry: _load, compact: true)
-          else if (visible.isEmpty)
-            EmptyState(
-              title: _search.text.isEmpty ? L10n.t('folderEmpty') : L10n.t('noResults'),
-              body: L10n.t('filesSubtitle'),
-              icon: Icons.folder_open_rounded,
-              compact: true,
-            )
-          else
-            Container(
-              decoration: BoxDecoration(
-                gradient: NovaGradients.card(p),
-                borderRadius: NovaRadii.rLg,
-                border: Border.all(color: p.stroke),
-              ),
-              clipBehavior: Clip.antiAlias,
-              child: Column(
-                children: List<Widget>.generate(visible.length, (int i) {
-                  final DirEntry entry = visible[i];
-                  final _FileStyle style = _styleFor(entry);
-                  final IconData icon = style.icon;
-                  final Color color = style.color;
-                  final DateTime? date = _dates[entry.path];
-                  final bool busy = _busyPath == entry.path;
-                  return Column(
-                    children: <Widget>[
-                      if (i > 0) SoftDivider(),
-                      InkWell(
-                        onTap: () => _open(entry),
-                        onLongPress: () => _showActions(entry),
-                        child: Padding(
-                          padding: const EdgeInsets.fromLTRB(14, 11, 8, 11),
-                          child: Row(
-                            children: <Widget>[
-                              Container(
-                                width: 34,
-                                height: 34,
-                                decoration: BoxDecoration(
-                                  color: color.withValues(alpha: 0.12),
-                                  borderRadius: NovaRadii.rXs,
-                                  border: Border.all(color: color.withValues(alpha: 0.24)),
-                                ),
-                                child: Icon(icon, size: 17, color: color),
-                              ),
-                              const SizedBox(width: 11),
-                              Expanded(
-                                child: Column(
-                                  crossAxisAlignment: CrossAxisAlignment.start,
-                                  children: <Widget>[
-                                    Text(
-                                      entry.name,
-                                      maxLines: 1,
-                                      overflow: TextOverflow.ellipsis,
-                                      style: NovaTextStyles.bodyStrong(p.text).copyWith(fontSize: 13.5),
-                                    ),
-                                    const SizedBox(height: 1),
-                                    Text(
-                                      entry.isDir ? L10n.t('folderLabel') : Fmt.bytes(entry.size),
-                                      style: NovaTextStyles.caption(p.textDim),
-                                    ),
-                                  ],
-                                ),
-                              ),
-                              if (date != null)
-                                Padding(
-                                  padding: const EdgeInsetsDirectional.only(end: 6),
-                                  child: Text(Fmt.relative(date), style: NovaTextStyles.caption(p.textDim)),
-                                ),
-                              if (busy)
-                                const Padding(
-                                  padding: EdgeInsets.symmetric(horizontal: 8),
-                                  child: SizedBox(width: 15, height: 15, child: NovaLoader(size: 15, stroke: 1.8)),
-                                )
-                              else
-                                NovaIconButton(
-                                  icon: Icons.more_vert_rounded,
-                                  size: 32,
-                                  iconSize: 16,
-                                  onTap: () => _showActions(entry),
-                                ),
-                            ],
+        ),
+        const SizedBox(height: 8),
+        Expanded(
+          child: _loading
+              ? const Padding(padding: EdgeInsets.all(NovaSpace.page), child: SkeletonList(count: 6, cardHeight: 54))
+              : _error != null
+                  ? ErrorState(message: _error!, onRetry: () => _load(withSnapshot: true))
+                  : manifest == null || children.isEmpty
+                      ? EmptyState(
+                          title: L10n.t('filesEmptyTitle'),
+                          body: L10n.t('filesEmptyBody'),
+                          icon: Icons.folder_open_rounded,
+                          compact: true,
+                        )
+                      : RefreshIndicator(
+                          color: p.primaryBright,
+                          backgroundColor: p.cardHigh,
+                          onRefresh: () => _load(withSnapshot: true),
+                          child: ListView.separated(
+                            padding: const EdgeInsets.fromLTRB(NovaSpace.page, 0, NovaSpace.page, 130),
+                            itemCount: children.length,
+                            separatorBuilder: (BuildContext c, int i) => const SizedBox(height: 6),
+                            itemBuilder: (BuildContext context, int index) {
+                              final ServerFileEntry entry = children[index];
+                              return _FileRow(
+                                entry: entry,
+                                onTap: () => _openEntry(entry),
+                                onLongPress: () => _showDetails(entry),
+                              );
+                            },
                           ),
                         ),
-                      ),
-                    ],
-                  );
-                }),
-              ),
+        ),
+        if (manifest != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(NovaSpace.page, 0, NovaSpace.page, 8),
+            child: Row(
+              children: <Widget>[
+                Icon(Icons.shield_outlined, size: 12, color: p.textDim),
+                const SizedBox(width: 6),
+                Expanded(child: Text(L10n.t('serverDataOnly'), style: NovaTextStyles.caption(p.textDim))),
+              ],
             ),
-          const SizedBox(height: 12),
-          Row(
-            children: <Widget>[
-              Icon(Icons.lock_rounded, size: 12, color: p.textDim),
-              const SizedBox(width: 6),
-              Expanded(
-                child: Text(
-                  '${L10n.t('pathBreadcrumb')}: /${_breadcrumbs.join('/')}',
-                  style: NovaTextStyles.caption(p.textDim),
-                ),
-              ),
-              Text(_branch, style: NovaTextStyles.mono(10, p.textDim)),
-            ],
           ),
-        ],
-      ),
+      ],
     );
   }
 }
 
-class _FileStyle {
-  const _FileStyle(this.icon, this.color);
+class _BreadcrumbBar extends StatelessWidget {
+  const _BreadcrumbBar({required this.segments, required this.onRoot, required this.onSegment});
 
-  final IconData icon;
-  final Color color;
-}
-
-class _Breadcrumbs extends StatelessWidget {
-  const _Breadcrumbs({required this.repo, required this.segments, required this.onRoot, required this.onSegment});
-
-  final String repo;
   final List<String> segments;
   final VoidCallback onRoot;
   final ValueChanged<int> onSegment;
@@ -786,9 +686,9 @@ class _Breadcrumbs extends StatelessWidget {
           child: Row(
             mainAxisSize: MainAxisSize.min,
             children: <Widget>[
-              Icon(Icons.home_rounded, size: 13, color: segments.isEmpty ? p.primaryBright : p.textMuted),
+              Icon(Icons.dns_rounded, size: 13, color: segments.isEmpty ? p.primaryBright : p.textMuted),
               const SizedBox(width: 5),
-              Text(repo, style: NovaTextStyles.caption(segments.isEmpty ? p.primaryBright : p.textMuted)),
+              Text(L10n.t('serverData'), style: NovaTextStyles.caption(segments.isEmpty ? p.primaryBright : p.textMuted)),
             ],
           ),
         ),
@@ -798,7 +698,7 @@ class _Breadcrumbs extends StatelessWidget {
       final bool last = i == segments.length - 1;
       children.add(Padding(
         padding: const EdgeInsetsDirectional.only(start: 4),
-        child: Icon(Icons.chevron_right_rounded, size: 14, color: p.textDim),
+        child: Icon(context.isRtl ? Icons.chevron_left_rounded : Icons.chevron_right_rounded, size: 14, color: p.textDim),
       ));
       children.add(GestureDetector(
         onTap: () => onSegment(i),
@@ -809,43 +709,69 @@ class _Breadcrumbs extends StatelessWidget {
             borderRadius: NovaRadii.rXs,
             border: Border.all(color: last ? p.primary.withValues(alpha: 0.35) : p.stroke),
           ),
-          child: Text(
-            segments[i],
-            style: NovaTextStyles.caption(last ? p.primaryBright : p.textMuted),
-          ),
+          child: Text(segments[i], style: NovaTextStyles.caption(last ? p.primaryBright : p.textMuted)),
         ),
       ));
     }
     return SingleChildScrollView(
       scrollDirection: Axis.horizontal,
-      reverse: Directionality.of(context) == TextDirection.rtl,
       child: Row(children: children),
     );
   }
 }
 
-class _ActionTile extends StatelessWidget {
-  const _ActionTile({required this.icon, required this.label, required this.onTap, this.danger = false});
+class _FileRow extends StatelessWidget {
+  const _FileRow({required this.entry, required this.onTap, required this.onLongPress});
 
-  final IconData icon;
-  final String label;
+  final ServerFileEntry entry;
   final VoidCallback onTap;
-  final bool danger;
+  final VoidCallback onLongPress;
 
   @override
   Widget build(BuildContext context) {
     final p = context.nova;
-    final Color color = danger ? p.danger : p.text;
-    return InkWell(
+    return PressableScale(
       onTap: onTap,
-      borderRadius: NovaRadii.rMd,
-      child: Padding(
-        padding: const EdgeInsets.symmetric(vertical: 12, horizontal: 4),
+      onLongPress: onLongPress,
+      child: Container(
+        padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 11),
+        decoration: BoxDecoration(
+          color: p.cardSoft,
+          borderRadius: NovaRadii.rMd,
+          border: Border.all(color: p.stroke),
+        ),
         child: Row(
           children: <Widget>[
-            Icon(icon, size: 19, color: danger ? p.danger : p.primaryBright),
-            const SizedBox(width: 14),
-            Expanded(child: Text(label, style: NovaTextStyles.body(color))),
+            Container(
+              width: 34,
+              height: 34,
+              alignment: Alignment.center,
+              decoration: BoxDecoration(
+                color: (entry.isDir ? p.violet : p.primary).withValues(alpha: 0.12),
+                borderRadius: NovaRadii.rXs,
+              ),
+              child: Icon(
+                entry.isDir ? Icons.folder_rounded : Icons.insert_drive_file_rounded,
+                size: 17,
+                color: entry.isDir ? p.violet : p.primaryBright,
+              ),
+            ),
+            const SizedBox(width: 12),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(entry.name, maxLines: 1, overflow: TextOverflow.ellipsis, style: NovaTextStyles.bodyStrong(p.text)),
+                  Text(
+                    entry.isDir ? L10n.t('folderLabel') : '${Fmt.bytes(entry.size)} · ${Fmt.relative(entry.modified)}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: NovaTextStyles.caption(p.textDim),
+                  ),
+                ],
+              ),
+            ),
+            Icon(entry.isDir ? (context.isRtl ? Icons.chevron_left_rounded : Icons.chevron_right_rounded) : Icons.more_horiz_rounded, color: p.textDim, size: 18),
           ],
         ),
       ),
@@ -853,25 +779,51 @@ class _ActionTile extends StatelessWidget {
   }
 }
 
+/// Full-screen text editor used for real server configuration files.
 class FileEditorScreen extends StatefulWidget {
-  const FileEditorScreen({super.key, required this.title, required this.path, required this.initialText});
+  const FileEditorScreen({
+    super.key,
+    required this.title,
+    required this.path,
+    required this.initialText,
+    this.project,
+    this.readOnly = false,
+  });
 
   final String title;
   final String path;
   final String initialText;
+  final ServerConfig? project;
+  final bool readOnly;
 
   @override
   State<FileEditorScreen> createState() => _FileEditorScreenState();
 }
 
 class _FileEditorScreenState extends State<FileEditorScreen> {
-  late final TextEditingController _controller = TextEditingController(text: widget.initialText);
+  late final TextEditingController _text = TextEditingController(text: widget.initialText);
   bool _dirty = false;
 
   @override
   void dispose() {
-    _controller.dispose();
+    _text.dispose();
     super.dispose();
+  }
+
+  Future<void> _close() async {
+    if (!_dirty) {
+      Navigator.of(context).pop();
+      return;
+    }
+    final bool ok = await showNovaConfirm(
+      context,
+      title: L10n.t('discardChanges'),
+      body: L10n.t('discardChangesBody'),
+      confirmLabel: L10n.t('discard'),
+      danger: true,
+    );
+    if (!ok || !mounted) return;
+    Navigator.of(context).pop();
   }
 
   @override
@@ -880,73 +832,44 @@ class _FileEditorScreenState extends State<FileEditorScreen> {
     return Scaffold(
       backgroundColor: p.bg,
       appBar: AppBar(
-        backgroundColor: p.surface,
-        surfaceTintColor: Colors.transparent,
-        titleSpacing: 0,
-        leading: IconButton(
-          icon: Icon(Icons.close_rounded, color: p.text),
-          onPressed: () => Navigator.of(context).pop(),
-        ),
+        backgroundColor: p.bg,
+        elevation: 0,
+        leading: IconButton(icon: const Icon(Icons.close_rounded), onPressed: _close),
         title: Column(
           crossAxisAlignment: CrossAxisAlignment.start,
           children: <Widget>[
-            Text(widget.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: NovaTextStyles.title(p.text)),
-            Text(widget.path, maxLines: 1, overflow: TextOverflow.ellipsis, style: NovaTextStyles.caption(p.textDim)),
+            Text(widget.title, style: NovaTextStyles.title(p.text)),
+            Text('/${widget.path}', maxLines: 1, overflow: TextOverflow.ellipsis, style: NovaTextStyles.caption(p.textDim)),
           ],
         ),
         actions: <Widget>[
-          TextButton(
-            onPressed: () => Navigator.of(context).pop(_controller.text),
-            child: Text(L10n.t('save'), style: NovaTextStyles.smallStrong(p.primaryBright)),
-          ),
+          if (!widget.readOnly)
+            TextButton(
+              onPressed: _dirty ? () => Navigator.of(context).pop(_text.text) : null,
+              child: Text(L10n.t('save')),
+            ),
         ],
       ),
       body: SafeArea(
-        child: Column(
-          children: <Widget>[
-            if (_dirty)
-              Container(
-                width: double.infinity,
-                color: p.warning.withValues(alpha: 0.12),
-                padding: const EdgeInsets.symmetric(vertical: 6, horizontal: 16),
-                child: Text(L10n.t('fileEdit'), style: NovaTextStyles.caption(p.warning)),
-              ),
-            Expanded(
-              child: TextField(
-                controller: _controller,
-                maxLines: null,
-                expands: true,
-                onChanged: (_) {
-                  if (!_dirty) setState(() => _dirty = true);
-                },
-                keyboardType: TextInputType.multiline,
-                textAlignVertical: TextAlignVertical.top,
-                style: TextStyle(fontFamily: 'PlexMono', fontSize: 12, height: 1.5, color: p.text),
-                decoration: InputDecoration(
-                  border: InputBorder.none,
-                  contentPadding: const EdgeInsets.all(16),
-                  hintText: L10n.t('fileEdit'),
-                  hintStyle: TextStyle(fontFamily: 'PlexMono', fontSize: 12, color: p.textDim),
-                ),
-              ),
+        top: false,
+        child: Padding(
+          padding: const EdgeInsets.all(NovaSpace.page),
+          child: TextField(
+            controller: _text,
+            readOnly: widget.readOnly,
+            maxLines: null,
+            expands: true,
+            textAlignVertical: TextAlignVertical.top,
+            onChanged: (_) => setState(() => _dirty = true),
+            style: NovaTextStyles.mono(12.5, p.text),
+            decoration: InputDecoration(
+              filled: true,
+              fillColor: p.cardSoft,
+              border: OutlineInputBorder(borderRadius: NovaRadii.rMd, borderSide: BorderSide(color: p.stroke)),
+              enabledBorder: OutlineInputBorder(borderRadius: NovaRadii.rMd, borderSide: BorderSide(color: p.stroke)),
+              focusedBorder: OutlineInputBorder(borderRadius: NovaRadii.rMd, borderSide: BorderSide(color: p.primary)),
             ),
-            Container(
-              padding: const EdgeInsets.symmetric(horizontal: 16, vertical: 8),
-              decoration: BoxDecoration(
-                color: p.cardSoft,
-                border: Border(top: BorderSide(color: p.stroke)),
-              ),
-              child: Row(
-                children: <Widget>[
-                  Icon(Icons.code_rounded, size: 13, color: p.textDim),
-                  const SizedBox(width: 6),
-                  Text('${_controller.text.length}', style: NovaTextStyles.mono(10, p.textDim)),
-                  const Spacer(),
-                  Text('NOVA CRAFT', style: NovaTextStyles.caption(p.textDim)),
-                ],
-              ),
-            ),
-          ],
+          ),
         ),
       ),
     );

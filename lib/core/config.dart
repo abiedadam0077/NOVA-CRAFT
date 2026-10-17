@@ -26,6 +26,13 @@ class AppConfig {
 
   static String get userAgent => 'NOVA-CRAFT-Flutter/$versionName';
   static String get appInstallUrl => 'https://github.com/apps/$githubAppSlug/installations/new';
+
+  /// Install/configure URL pre-filled with one repository, so the user does
+  /// not have to hunt for the right repository in GitHub's picker.
+  static String appInstallUrlFor(String? repoFull) {
+    if (repoFull == null || !repoFull.contains('/')) return appInstallUrl;
+    return 'https://github.com/apps/$githubAppSlug/installations/new?state=${Uri.encodeComponent(repoFull)}';
+  }
   static String get appPageUrl => 'https://github.com/apps/$githubAppSlug';
   static const String manageInstallationsUrl = 'https://github.com/settings/installations';
   static String repoUrl(String owner, String repo) => 'https://github.com/$owner/$repo';

@@ -171,6 +171,26 @@ class _ModsViewState extends State<ModsView> {
     }
   }
 
+  /// Human-readable reason a concrete version cannot be installed here.
+  String _rejectionReason(ModrinthVersion version) {
+    final List<String> allowed = _allowedLoaders;
+    final bool loaderOk = version.loaders.any((String l) => allowed.contains(l));
+    final bool versionOk = widget.config.mcVersion.isEmpty || version.gameVersions.contains(widget.config.mcVersion);
+    if (!loaderOk) {
+      return L10n.f('modRejectLoaders', <String, String>{
+        'loaders': version.loaders.isEmpty ? '—' : version.loaders.join(', '),
+        'current': _loader ?? '',
+      });
+    }
+    if (!versionOk) {
+      return L10n.f('modRejectVersions', <String, String>{
+        'versions': version.gameVersions.take(5).join(', '),
+        'current': widget.config.mcVersion,
+      });
+    }
+    return L10n.t('modIncompatibleShort');
+  }
+
   bool _compatible(ModrinthVersion version) {
     final bool loaderOk = version.loaders.any((String l) => _allowedLoaders.contains(l));
     final bool versionOk = widget.config.mcVersion.isEmpty || version.gameVersions.contains(widget.config.mcVersion);
@@ -183,12 +203,15 @@ class _ModsViewState extends State<ModsView> {
       final AppState state = AppScope.read(context);
       final List<ModrinthVersion> versions = await state.modrinth.versions(project.id);
       final List<ModrinthVersion> compatible = versions.where(_compatible).toList();
+      final List<ModrinthVersion> rejected = versions.where((ModrinthVersion v) => !_compatible(v)).toList();
       if (!mounted) return;
       if (compatible.isEmpty) {
-        showNovaToast(context, L10n.t('modNoCompatibleVersion'), kind: ToastKind.warning);
+        // Never install a mismatched jar: show exactly why every version was
+        // rejected instead of a generic toast.
+        await _showNoCompatible(project, versions);
         return;
       }
-      final ModrinthVersion? choice = await _pickVersion(project, compatible);
+      final ModrinthVersion? choice = await _pickVersion(project, compatible, rejected);
       if (choice == null || !mounted) return;
       final ModrinthVersionFile? file = choice.primaryFile;
       if (file == null) {
@@ -233,7 +256,78 @@ class _ModsViewState extends State<ModsView> {
     }
   }
 
-  Future<ModrinthVersion?> _pickVersion(ModrinthProject project, List<ModrinthVersion> versions) {
+  /// Lists every incompatible version with its concrete rejection reason.
+  Future<void> _showNoCompatible(ModrinthProject project, List<ModrinthVersion> versions) {
+    final p = context.nova;
+    return showModalBottomSheet<void>(
+      context: context,
+      backgroundColor: Colors.transparent,
+      isScrollControlled: true,
+      builder: (BuildContext ctx) => Container(
+        constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.78),
+        padding: const EdgeInsets.fromLTRB(18, 10, 18, 20),
+        decoration: BoxDecoration(
+          color: p.surface,
+          borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
+          border: Border(top: BorderSide(color: p.stroke)),
+        ),
+        child: SafeArea(
+          top: false,
+          child: Column(
+            mainAxisSize: MainAxisSize.min,
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Center(child: Container(width: 38, height: 4, decoration: BoxDecoration(color: p.strokeStrong, borderRadius: NovaRadii.rPill))),
+              const SizedBox(height: 14),
+              Row(
+                children: <Widget>[
+                  Icon(Icons.block_rounded, size: 20, color: p.warning),
+                  const SizedBox(width: 8),
+                  Expanded(child: Text(L10n.t('modNoCompatibleTitle'), style: NovaTextStyles.title(p.text))),
+                ],
+              ),
+              const SizedBox(height: 6),
+              Text(
+                L10n.f('modNoCompatibleBody', <String, String>{
+                  'loader': _loader ?? '',
+                  'version': widget.config.mcVersion,
+                  'count': '${versions.length}',
+                }),
+                style: NovaTextStyles.small(p.textMuted),
+              ),
+              const SizedBox(height: 12),
+              Flexible(
+                child: versions.isEmpty
+                    ? Text(L10n.t('modNoVersionsAtAll'), style: NovaTextStyles.small(p.textDim))
+                    : ListView.separated(
+                        shrinkWrap: true,
+                        itemCount: versions.length,
+                        separatorBuilder: (BuildContext c, int i) => const SizedBox(height: 7),
+                        itemBuilder: (BuildContext c, int i) => _RejectedVersionTile(
+                          version: versions[i],
+                          reason: _rejectionReason(versions[i]),
+                        ),
+                      ),
+              ),
+              const SizedBox(height: 12),
+              NovaButton(
+                label: L10n.t('close'),
+                variant: NovaButtonVariant.secondary,
+                height: 46,
+                onPressed: () => Navigator.of(ctx).pop(),
+              ),
+            ],
+          ),
+        ),
+      ),
+    );
+  }
+
+  Future<ModrinthVersion?> _pickVersion(
+    ModrinthProject project,
+    List<ModrinthVersion> versions,
+    List<ModrinthVersion> rejected,
+  ) {
     final p = context.nova;
     return showModalBottomSheet<ModrinthVersion>(
       context: context,
@@ -241,77 +335,63 @@ class _ModsViewState extends State<ModsView> {
       isScrollControlled: true,
       builder: (BuildContext ctx) {
         return Container(
-          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.72),
+          constraints: BoxConstraints(maxHeight: MediaQuery.sizeOf(ctx).height * 0.78),
           padding: const EdgeInsets.fromLTRB(18, 10, 18, 20),
           decoration: BoxDecoration(
             color: p.surface,
             borderRadius: const BorderRadius.vertical(top: Radius.circular(26)),
             border: Border(top: BorderSide(color: p.stroke)),
           ),
-          child: Column(
-            mainAxisSize: MainAxisSize.min,
-            children: <Widget>[
-              Container(width: 38, height: 4, decoration: BoxDecoration(color: p.strokeStrong, borderRadius: NovaRadii.rPill)),
-              const SizedBox(height: 14),
-              Text(project.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: NovaTextStyles.title(p.text)),
-              const SizedBox(height: 3),
-              Text(
-                '${L10n.t('modMcVersion')} ${widget.config.mcVersion} · ${_loader ?? ''}',
-                style: NovaTextStyles.small(p.textDim),
-              ),
-              const SizedBox(height: 12),
-              Flexible(
-                child: ListView.separated(
-                  shrinkWrap: true,
-                  itemCount: versions.length,
-                  separatorBuilder: (BuildContext c, int i) => const SizedBox(height: 8),
-                  itemBuilder: (BuildContext c, int i) {
-                    final ModrinthVersion v = versions[i];
-                    return PressableScale(
-                      onTap: () => Navigator.of(ctx).pop(v),
-                      child: Container(
-                        padding: const EdgeInsets.all(12),
-                        decoration: BoxDecoration(
-                          color: p.cardSoft,
-                          borderRadius: NovaRadii.rMd,
-                          border: Border.all(color: p.stroke),
-                        ),
-                        child: Row(
-                          children: <Widget>[
-                            Container(
-                              width: 34,
-                              height: 34,
-                              decoration: BoxDecoration(
-                                color: p.violet.withValues(alpha: 0.14),
-                                borderRadius: NovaRadii.rXs,
-                              ),
-                              child: Icon(Icons.extension_rounded, size: 17, color: p.violet),
-                            ),
-                            const SizedBox(width: 10),
-                            Expanded(
-                              child: Column(
-                                crossAxisAlignment: CrossAxisAlignment.start,
-                                children: <Widget>[
-                                  Text(v.versionNumber, style: NovaTextStyles.bodyStrong(p.text).copyWith(fontSize: 13)),
-                                  const SizedBox(height: 2),
-                                  Text(
-                                    '${v.loaders.join(', ')} · ${v.gameVersions.take(3).join(', ')}',
-                                    maxLines: 1,
-                                    overflow: TextOverflow.ellipsis,
-                                    style: NovaTextStyles.caption(p.textDim),
-                                  ),
-                                ],
-                              ),
-                            ),
-                            Icon(Icons.download_rounded, size: 18, color: p.primaryBright),
-                          ],
-                        ),
-                      ),
-                    );
-                  },
+          child: SafeArea(
+            top: false,
+            child: Column(
+              mainAxisSize: MainAxisSize.min,
+              crossAxisAlignment: CrossAxisAlignment.stretch,
+              children: <Widget>[
+                Center(child: Container(width: 38, height: 4, decoration: BoxDecoration(color: p.strokeStrong, borderRadius: NovaRadii.rPill))),
+                const SizedBox(height: 14),
+                Text(project.title, maxLines: 1, overflow: TextOverflow.ellipsis, style: NovaTextStyles.title(p.text)),
+                const SizedBox(height: 3),
+                Text(
+                  L10n.f('modPickVersionFor', <String, String>{
+                    'loader': _loader ?? '',
+                    'version': widget.config.mcVersion,
+                  }),
+                  style: NovaTextStyles.small(p.textDim),
                 ),
-              ),
-            ],
+                const SizedBox(height: 12),
+                Flexible(
+                  child: ListView(
+                    shrinkWrap: true,
+                    children: <Widget>[
+                      ...versions.map((ModrinthVersion v) => Padding(
+                            padding: const EdgeInsets.only(bottom: 8),
+                            child: _VersionTile(
+                              version: v,
+                              onTap: () => Navigator.of(ctx).pop(v),
+                            ),
+                          )),
+                      if (rejected.isNotEmpty) ...<Widget>[
+                        const SizedBox(height: 4),
+                        Text(
+                          L10n.f('modIncompatibleVersions', <String, String>{
+                            'count': '${rejected.length}',
+                            'loader': _loader ?? '',
+                            'version': widget.config.mcVersion,
+                          }),
+                          style: NovaTextStyles.caption(p.textDim),
+                        ),
+                        const SizedBox(height: 8),
+                        ...rejected.take(12).map((ModrinthVersion v) => Padding(
+                              padding: const EdgeInsets.only(bottom: 7),
+                              child: _RejectedVersionTile(version: v, reason: _rejectionReason(v)),
+                            )),
+                      ],
+                    ],
+                  ),
+                ),
+              ],
+            ),
           ),
         );
       },
@@ -817,6 +897,96 @@ class _Meta extends StatelessWidget {
         const SizedBox(width: 3),
         Text(text, style: NovaTextStyles.caption(p.textDim)),
       ],
+    );
+  }
+}
+
+class _VersionTile extends StatelessWidget {
+  const _VersionTile({required this.version, required this.onTap});
+
+  final ModrinthVersion version;
+  final VoidCallback onTap;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.nova;
+    return PressableScale(
+      onTap: onTap,
+      child: Container(
+        padding: const EdgeInsets.all(12),
+        decoration: BoxDecoration(
+          color: p.cardSoft,
+          borderRadius: NovaRadii.rMd,
+          border: Border.all(color: p.stroke),
+        ),
+        child: Row(
+          children: <Widget>[
+            Container(
+              width: 34,
+              height: 34,
+              decoration: BoxDecoration(
+                color: p.violet.withValues(alpha: 0.14),
+                borderRadius: NovaRadii.rXs,
+              ),
+              child: Icon(Icons.extension_rounded, size: 17, color: p.violet),
+            ),
+            const SizedBox(width: 10),
+            Expanded(
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Text(version.versionNumber, style: NovaTextStyles.bodyStrong(p.text).copyWith(fontSize: 13)),
+                  const SizedBox(height: 2),
+                  Text(
+                    '${version.loaders.join(', ')} · ${version.gameVersions.take(3).join(', ')}',
+                    maxLines: 1,
+                    overflow: TextOverflow.ellipsis,
+                    style: NovaTextStyles.caption(p.textDim),
+                  ),
+                ],
+              ),
+            ),
+            Icon(Icons.download_rounded, size: 18, color: p.primaryBright),
+          ],
+        ),
+      ),
+    );
+  }
+}
+
+class _RejectedVersionTile extends StatelessWidget {
+  const _RejectedVersionTile({required this.version, required this.reason});
+
+  final ModrinthVersion version;
+  final String reason;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.nova;
+    return Container(
+      padding: const EdgeInsets.symmetric(horizontal: 12, vertical: 10),
+      decoration: BoxDecoration(
+        color: p.warning.withValues(alpha: 0.06),
+        borderRadius: NovaRadii.rMd,
+        border: Border.all(color: p.warning.withValues(alpha: 0.25)),
+      ),
+      child: Row(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Icon(Icons.block_rounded, size: 15, color: p.warning),
+          const SizedBox(width: 9),
+          Expanded(
+            child: Column(
+              crossAxisAlignment: CrossAxisAlignment.start,
+              children: <Widget>[
+                Text(version.versionNumber, style: NovaTextStyles.bodyStrong(p.textMuted).copyWith(fontSize: 12.5)),
+                const SizedBox(height: 2),
+                Text(reason, style: NovaTextStyles.caption(p.warning)),
+              ],
+            ),
+          ),
+        ],
+      ),
     );
   }
 }

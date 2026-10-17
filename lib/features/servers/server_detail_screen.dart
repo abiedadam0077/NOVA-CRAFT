@@ -123,7 +123,7 @@ class _ServerDetailScreenState extends State<ServerDetailScreen> {
           ],
         );
       case 2:
-        return FileBrowser(config: widget.config, embedded: true);
+        return ServerFilesView(config: widget.config, active: true);
       case 3:
         return Padding(
           padding: const EdgeInsets.fromLTRB(NovaSpace.page, 8, NovaSpace.page, 12),

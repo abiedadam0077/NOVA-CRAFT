@@ -26,6 +26,7 @@ class SecureStore {
   static const String _lastServerKey = 'nova_last_server';
   static const String _playitKey = 'playit_agent_secret_enc';
   static const String _playitPreparedKey = 'nova_playit_prepared';
+  static const String _playitSkippedKey = 'nova_playit_skipped';
 
   Future<void> init() async {
     _prefs ??= await SharedPreferences.getInstance();
@@ -103,6 +104,15 @@ class SecureStore {
     await _secure.write(key: _playitKey, value: value.trim());
     await _p.setBool(_playitPreparedKey, true);
   }
+
+  Future<void> markPlayitPrepared() async {
+    await _p.setBool(_playitPreparedKey, true);
+    await _p.setBool(_playitSkippedKey, false);
+  }
+
+  bool get playitSkipped => _p.getBool(_playitSkippedKey) ?? false;
+
+  Future<void> setPlayitSkipped(bool value) => _p.setBool(_playitSkippedKey, value);
 
   Future<String?> playitSecret() async {
     try {

@@ -8,6 +8,7 @@ import 'core/strings.dart';
 import 'design/theme.dart';
 import 'design/tokens.dart';
 import 'features/auth/auth_screen.dart';
+import 'features/onboarding/onboarding_screen.dart';
 import 'features/onboarding/playit_setup_screen.dart';
 import 'features/servers/create_server_screen.dart';
 import 'features/shell/app_shell.dart';
@@ -137,13 +138,19 @@ class _RootGateState extends State<RootGate> {
     if (state.booting || !state.sessionReady || !_splashElapsed) {
       return const SplashScreen();
     }
+    if (!state.onboarded) {
+      return const OnboardingScreen();
+    }
     if (!state.signedIn) {
       return const AuthScreen(showBack: false);
     }
     if (state.loadingServers && state.servers.isEmpty) {
       return const SplashScreen();
     }
-    if (!state.playitPrepared && !state.playitSkipped) {
+    // The guided Playit step belongs to the first run only: a returning user
+    // who already has servers manages the tunnel from Server settings and is
+    // never blocked by it.
+    if (!state.playitPrepared && !state.playitSkipped && state.servers.isEmpty) {
       return PlayitSetupScreen(onDone: () => setState(() {}));
     }
     if (state.servers.isEmpty) {

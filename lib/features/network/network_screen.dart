@@ -6,6 +6,7 @@ import '../../core/config.dart';
 import '../../core/formatters.dart';
 import '../../core/minecraft_ping.dart';
 import '../../core/models.dart';
+import '../../core/playit_api.dart';
 import '../../core/provisioner.dart';
 import '../../core/strings.dart';
 import '../../core/validation.dart';
@@ -19,7 +20,13 @@ import '../../design/widgets/surfaces.dart';
 import '../../state/app_state.dart';
 
 class NetworkView extends StatefulWidget {
-  const NetworkView({super.key, required this.config, this.active = true, this.reportedAddress = ''});
+  const NetworkView({
+    super.key,
+    required this.config,
+    this.active = true,
+    this.reportedAddress = '',
+    this.runtime,
+  });
 
   final ServerConfig config;
   final bool active;
@@ -27,6 +34,9 @@ class NetworkView extends StatefulWidget {
   /// Address the Playit agent reported in `status.json`. Shown when the config
   /// has no manual override — it is never invented by the app.
   final String reportedAddress;
+
+  /// Latest runner snapshot, used for the real tunnel name/protocol/reasons.
+  final ServerRuntime? runtime;
 
   @override
   State<NetworkView> createState() => _NetworkViewState();
@@ -45,6 +55,9 @@ class _NetworkViewState extends State<NetworkView> {
   PingResult? _result;
   DateTime? _testedAt;
   String? _testError;
+  bool _checkingPlayit = false;
+  PlayitAgentState? _playitState;
+  String? _playitError;
 
   @override
   void initState() {
@@ -166,6 +179,33 @@ class _NetworkViewState extends State<NetworkView> {
       setState(() => _testError = Fmt.error(error));
     } finally {
       if (mounted) setState(() => _testing = false);
+    }
+  }
+
+  /// Calls Playit's agent API with the locally stored key. This is the only
+  /// way the app can state anything about the tunnel without the runner.
+  Future<void> _checkPlayit() async {
+    setState(() {
+      _checkingPlayit = true;
+      _playitError = null;
+    });
+    try {
+      final AppState state = AppScope.read(context);
+      final PlayitAgentState result = await state.inspectPlayit(bedrock: widget.config.isBedrock);
+      if (!mounted) return;
+      setState(() {
+        if (result.ok) {
+          _playitState = result;
+        } else {
+          _playitState = null;
+          _playitError = result.error == 'missing-secret' ? L10n.t('playitSecretMissing') : result.error;
+        }
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _playitError = Fmt.error(error));
+    } finally {
+      if (mounted) setState(() => _checkingPlayit = false);
     }
   }
 
@@ -419,6 +459,8 @@ class _NetworkViewState extends State<NetworkView> {
         SectionCard(
           title: L10n.t('tunnelStatus'),
           icon: Icons.cable_rounded,
+          actionLabel: _checkingPlayit ? L10n.t('loading') : L10n.t('playitCheckNow'),
+          onAction: _checkingPlayit ? null : _checkPlayit,
           child: Column(
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
@@ -441,10 +483,64 @@ class _NetworkViewState extends State<NetworkView> {
                   ),
                 ],
               ),
+              if (widget.runtime != null) ...<Widget>[
+                const SizedBox(height: 10),
+                InfoRow(
+                  label: L10n.t('runnerTunnelState'),
+                  value: widget.runtime!.tunnelStatus.isEmpty ? L10n.t('unknown') : widget.runtime!.tunnelStatus,
+                  valueColor: widget.runtime!.tunnelConnected ? p.successBright : p.textMuted,
+                  monospace: true,
+                ),
+                if (widget.runtime!.tunnelName.isNotEmpty)
+                  InfoRow(label: L10n.t('playitTunnelName'), value: widget.runtime!.tunnelName),
+                if (widget.runtime!.tunnelProtocol.isNotEmpty)
+                  InfoRow(label: L10n.t('playitTunnelProtocol'), value: widget.runtime!.tunnelProtocol, monospace: true),
+                if (widget.runtime!.agentId.isNotEmpty)
+                  InfoRow(label: L10n.t('playitAgentId'), value: widget.runtime!.agentId, monospace: true),
+                for (final String reason in widget.runtime!.tunnelOfflineReasons)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 4),
+                    child: Text(
+                      L10n.f('playitTunnelDisabled', <String, String>{'reason': reason}),
+                      style: NovaTextStyles.caption(p.warning),
+                    ),
+                  ),
+              ],
+              if (_playitError != null) ...<Widget>[
+                const SizedBox(height: 8),
+                InlineError(message: _playitError!, onRetry: _checkPlayit),
+              ],
+              if (_playitState != null) ...<Widget>[
+                const SizedBox(height: 10),
+                Container(
+                  padding: const EdgeInsets.all(12),
+                  decoration: BoxDecoration(
+                    color: p.primary.withValues(alpha: 0.07),
+                    borderRadius: NovaRadii.rMd,
+                    border: Border.all(color: p.primary.withValues(alpha: 0.25)),
+                  ),
+                  child: Column(
+                    crossAxisAlignment: CrossAxisAlignment.start,
+                    children: <Widget>[
+                      Text(L10n.t('playitLiveCheck'), style: NovaTextStyles.caption(p.primaryBright)),
+                      if (_playitState!.agentId.isNotEmpty)
+                        InfoRow(label: L10n.t('playitAgentId'), value: _playitState!.agentId, monospace: true),
+                      ..._playitState!.tunnels.map((PlayitTunnel t) => InfoRow(
+                            label: '${t.type} · ${t.protocol}',
+                            value: t.hasAddress ? t.address : L10n.t('playitAwaitingAddress'),
+                            monospace: t.hasAddress,
+                            valueColor: t.hasAddress && t.enabled ? p.successBright : p.textMuted,
+                          )),
+                      if (_playitState!.tunnels.isEmpty)
+                        Text(L10n.t('playitNoTunnelsYet'), style: NovaTextStyles.small(p.textMuted)),
+                    ],
+                  ),
+                ),
+              ],
               const SizedBox(height: 10),
               Text(L10n.t('playitFreePlan'), style: NovaTextStyles.small(p.textMuted)),
               const SizedBox(height: 6),
-              Text(L10n.t('playitNoApi'), style: NovaTextStyles.caption(p.textDim)),
+              Text(L10n.t('playitStatusSource'), style: NovaTextStyles.caption(p.textDim)),
             ],
           ),
         ),

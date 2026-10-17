@@ -340,7 +340,7 @@ class _SettingsBodyState extends State<_SettingsBody> {
                 variant: NovaButtonVariant.secondary,
                 height: 46,
                 size: NovaButtonSize.compact,
-                onPressed: () => _openPage(NetworkView(config: server, reportedAddress: monitor.address)),
+                onPressed: () => _openPage(NetworkView(config: server, reportedAddress: monitor.address, runtime: monitor.runtime)),
               ),
             ],
           ),

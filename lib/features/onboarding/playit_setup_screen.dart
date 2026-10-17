@@ -3,6 +3,9 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/config.dart';
+import '../../core/formatters.dart';
+import '../../core/models.dart';
+import '../../core/playit_api.dart';
 import '../../core/strings.dart';
 import '../../design/theme.dart';
 import '../../design/tokens.dart';
@@ -15,13 +18,12 @@ import '../../design/widgets/nav.dart';
 import '../../design/widgets/surfaces.dart';
 import '../../state/app_state.dart';
 
-/// Step two of the first run: prepare the Playit.gg agent.
+/// Step two of the first run: connect the Playit.gg agent.
 ///
-/// The app cannot create a Playit tunnel by itself (Playit has no public API
-/// for that), so it walks the user through the dashboard, stores the agent
-/// secret encrypted on the device, and later installs it as a repository
-/// secret. Nothing is ever reported as "connected" here — that only happens
-/// after a real cycle reports a live tunnel.
+/// The secret is verified against Playit's real agent API before it is
+/// accepted, so "connected" is never shown for an unverified key. A public
+/// address is displayed only when Playit itself reports one for a tunnel of
+/// the right edition. Nothing here claims 24/7 uptime or a fixed address.
 class PlayitSetupScreen extends StatefulWidget {
   const PlayitSetupScreen({super.key, required this.onDone});
 
@@ -33,9 +35,13 @@ class PlayitSetupScreen extends StatefulWidget {
 
 class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
   final TextEditingController _secret = TextEditingController();
+  final PlayitApi _playit = PlayitApi();
   bool _obscure = true;
   bool _saving = false;
+  bool _checking = false;
   String? _error;
+  String? _note;
+  PlayitAgentState? _agent;
 
   @override
   void dispose() {
@@ -55,12 +61,52 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
     return null;
   }
 
-  Future<void> _save() async {
+  /// Asks Playit whether this key is real. The key is never logged.
+  Future<void> _verify() async {
     final String? problem = _validate(_secret.text);
     if (problem != null) {
       setState(() => _error = problem);
       return;
     }
+    FocusScope.of(context).unfocus();
+    setState(() {
+      _checking = true;
+      _error = null;
+      _note = null;
+    });
+    try {
+      final PlayitAgentState state = await _playit.agentState(_secret.text);
+      if (!mounted) return;
+      if (!state.ok) {
+        setState(() {
+          _agent = null;
+          _error = _explain(state.error);
+        });
+        return;
+      }
+      setState(() {
+        _agent = state;
+        _note = state.tunnels.isEmpty ? L10n.t('playitNoTunnelsYet') : null;
+      });
+    } finally {
+      if (mounted) setState(() => _checking = false);
+    }
+  }
+
+  String _explain(String raw) {
+    final String value = raw.toLowerCase();
+    if (value.contains('invalidagentkey') || value.contains('unauthorized') || value.contains('401')) {
+      return L10n.t('playitKeyRejected');
+    }
+    if (value.contains('requiresverifiedaccount')) return L10n.t('playitNeedsVerifiedAccount');
+    if (value.contains('requiresplayitpremium')) return L10n.t('playitNeedsPremium');
+    if (value.contains('timeout') || value.contains('socket') || value.contains('failed host lookup')) {
+      return L10n.t('playitNetworkError');
+    }
+    return raw.isEmpty ? L10n.t('errorGeneric') : raw;
+  }
+
+  Future<void> _save() async {
     setState(() {
       _saving = true;
       _error = null;
@@ -69,6 +115,7 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
       await AppScope.read(context).savePlayitSecret(_secret.text.trim());
       if (!mounted) return;
       HapticFeedback.mediumImpact();
+      _secret.clear();
       widget.onDone();
     } catch (error) {
       if (!mounted) return;
@@ -87,13 +134,17 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
       danger: true,
     );
     if (!ok || !mounted) return;
-    AppScope.read(context).skipPlayitForNow();
+    await AppScope.read(context).skipPlayitForNow();
     widget.onDone();
   }
 
   @override
   Widget build(BuildContext context) {
     final p = context.nova;
+    final PlayitAgentState? agent = _agent;
+    final PlayitTunnel? javaTunnel = agent?.tunnelFor(bedrock: false);
+    final PlayitTunnel? bedrockTunnel = agent?.tunnelFor(bedrock: true);
+    final bool verified = agent != null && agent.ok;
     return Scaffold(
       backgroundColor: p.bg,
       body: AuroraBackground(
@@ -108,11 +159,11 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
                   children: <Widget>[
                     ArtBanner(
                       asset: 'assets/images/art_network.jpg',
-                      height: 150,
+                      height: 140,
                       alignment: Alignment.center,
                       radius: NovaRadii.rXl,
                     ),
-                    const SizedBox(height: 20),
+                    const SizedBox(height: 18),
                     Text(L10n.t('playitSetupTitle'), style: NovaTextStyles.display(26, p.text)),
                     const SizedBox(height: 8),
                     Text(L10n.t('playitSetupBody'), style: NovaTextStyles.body(p.textMuted)),
@@ -148,7 +199,13 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
                       helper: L10n.t('playitKeyBody'),
                       errorText: _error,
                       onChanged: (_) {
-                        if (_error != null) setState(() => _error = null);
+                        if (_error != null || _agent != null) {
+                          setState(() {
+                            _error = null;
+                            _agent = null;
+                            _note = null;
+                          });
+                        }
                       },
                       suffix: NovaIconButton(
                         icon: _obscure ? Icons.visibility_rounded : Icons.visibility_off_rounded,
@@ -157,19 +214,53 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
                       ),
                     ),
                     const SizedBox(height: 16),
-                    NovaButton(
-                      label: L10n.t('continue'),
-                      icon: Icons.arrow_forward_rounded,
-                      onPressed: _saving ? null : _save,
-                      loading: _saving,
-                    ),
-                    const SizedBox(height: 10),
-                    InfoBanner(
-                      body: L10n.t('playitVerifyNote'),
-                      icon: Icons.verified_outlined,
-                      color: p.primaryBright,
-                      dense: true,
-                    ),
+                    if (!verified) ...<Widget>[
+                      NovaButton(
+                        label: L10n.t('playitVerifyKey'),
+                        icon: Icons.shield_outlined,
+                        loading: _checking,
+                        onPressed: _checking ? null : _verify,
+                      ),
+                      const SizedBox(height: 10),
+                      InfoBanner(
+                        body: L10n.t('playitVerifyNote'),
+                        icon: Icons.verified_outlined,
+                        color: p.primaryBright,
+                        dense: true,
+                      ),
+                    ] else ...<Widget>[
+                      _AgentCard(
+                        agent: agent!,
+                        javaTunnel: javaTunnel,
+                        bedrockTunnel: bedrockTunnel,
+                        note: _note,
+                      ),
+                      const SizedBox(height: 14),
+                      NovaButton(
+                        label: L10n.t('continue'),
+                        icon: Icons.arrow_forward_rounded,
+                        loading: _saving,
+                        onPressed: _saving ? null : _save,
+                      ),
+                      const SizedBox(height: 8),
+                      TextButton(
+                        onPressed: _checking ? null : _verify,
+                        style: TextButton.styleFrom(foregroundColor: p.textMuted),
+                        child: Text(
+                          L10n.t('playitRecheck'),
+                          style: NovaTextStyles.small(p.textMuted),
+                        ),
+                      ),
+                    ],
+                    if (verified) ...<Widget>[
+                      const SizedBox(height: 8),
+                      InfoBanner(
+                        body: L10n.t('playitAddressRuntimeNote'),
+                        icon: Icons.info_outline_rounded,
+                        color: p.violet,
+                        dense: true,
+                      ),
+                    ],
                     const SizedBox(height: 14),
                     Center(
                       child: TextButton(
@@ -186,6 +277,117 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
         ),
       ),
     );
+  }
+}
+
+/// Shows what Playit actually reported: the agent id and each tunnel with its
+/// real address, or an explicit "no address allocated yet".
+class _AgentCard extends StatelessWidget {
+  const _AgentCard({
+    required this.agent,
+    required this.javaTunnel,
+    required this.bedrockTunnel,
+    this.note,
+  });
+
+  final PlayitAgentState agent;
+  final PlayitTunnel? javaTunnel;
+  final PlayitTunnel? bedrockTunnel;
+  final String? note;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.nova;
+    return Container(
+      padding: const EdgeInsets.all(16),
+      decoration: BoxDecoration(
+        color: p.success.withValues(alpha: 0.09),
+        borderRadius: NovaRadii.rLg,
+        border: Border.all(color: p.success.withValues(alpha: 0.35)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.start,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Icon(Icons.check_circle_rounded, size: 20, color: p.successBright),
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(L10n.t('playitKeyVerified'), style: NovaTextStyles.bodyStrong(p.successBright)),
+              ),
+            ],
+          ),
+          if (agent.agentId.isNotEmpty) ...<Widget>[
+            const SizedBox(height: 10),
+            InfoRow(label: L10n.t('playitAgentId'), value: agent.agentId, monospace: true),
+          ],
+          const SizedBox(height: 10),
+          if (javaTunnel != null)
+            _TunnelRow(label: L10n.t('playitJavaTunnel'), tunnel: javaTunnel!, color: p.primaryBright)
+          else
+            _MissingRow(label: L10n.t('playitJavaTunnel')),
+          const SizedBox(height: 8),
+          if (bedrockTunnel != null)
+            _TunnelRow(label: L10n.t('playitBedrockTunnel'), tunnel: bedrockTunnel!, color: p.violet)
+          else
+            _MissingRow(label: L10n.t('playitBedrockTunnel')),
+          if (note != null) ...<Widget>[
+            const SizedBox(height: 10),
+            Text(note!, style: NovaTextStyles.small(p.textMuted)),
+          ],
+        ],
+      ),
+    );
+  }
+}
+
+class _TunnelRow extends StatelessWidget {
+  const _TunnelRow({required this.label, required this.tunnel, required this.color});
+
+  final String label;
+  final PlayitTunnel tunnel;
+  final Color color;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.nova;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.start,
+      children: <Widget>[
+        InfoRow(label: label, value: tunnel.hasAddress ? tunnel.address : L10n.t('playitAwaitingAddress'), monospace: tunnel.hasAddress),
+        if (!tunnel.enabled)
+          Padding(
+            padding: const EdgeInsets.only(top: 4),
+            child: Text(
+              L10n.f('playitTunnelDisabled', <String, String>{'reason': tunnel.disabledReason}),
+              style: NovaTextStyles.caption(p.warning),
+            ),
+          ),
+        if (tunnel.hasAddress && tunnel.enabled)
+          Padding(
+            padding: const EdgeInsets.only(top: 2),
+            child: Row(
+              children: <Widget>[
+                Icon(Icons.public_rounded, size: 12, color: color),
+                const SizedBox(width: 5),
+                Text(L10n.t('playitAddressLive'), style: NovaTextStyles.caption(color)),
+              ],
+            ),
+          ),
+      ],
+    );
+  }
+}
+
+class _MissingRow extends StatelessWidget {
+  const _MissingRow({required this.label});
+
+  final String label;
+
+  @override
+  Widget build(BuildContext context) {
+    final p = context.nova;
+    return InfoRow(label: label, value: L10n.t('playitNoTunnel'), trailing: Icon(Icons.remove_circle_outline_rounded, size: 14, color: p.textDim));
   }
 }
 
