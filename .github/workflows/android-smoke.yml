@@ -47,13 +47,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          set -euo pipefail
+          set -uo pipefail
           TAG="${TAG_INPUT:-}"
           if [ -z "$TAG" ]; then
             for i in $(seq 1 45); do
-              TAG=$(gh release list --limit 20 --json tagName,targetCommitish \
-                --jq ".[] | select(.targetCommitish==\"$GITHUB_SHA\") | .tagName" | head -1)
+              TAG=$(gh api "repos/$GITHUB_REPOSITORY/releases?per_page=30" \
+                --jq "[.[] | select(.target_commitish==\"$GITHUB_SHA\")][0].tag_name // empty" 2>/dev/null || true)
               if [ -n "$TAG" ]; then break; fi
+              echo "waiting for a release on $GITHUB_SHA ($i/45)"
               sleep 20
             done
           fi
