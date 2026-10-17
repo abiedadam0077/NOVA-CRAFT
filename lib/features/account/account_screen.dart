@@ -28,6 +28,11 @@ class _AccountScreenState extends State<AccountScreen> {
   bool _loadingRepos = true;
   String? _reposError;
 
+  bool _testing = false;
+  String? _tokenStatus;
+  String? _secretStatus;
+  String? _testError;
+
   @override
   void initState() {
     super.initState();
@@ -88,6 +93,48 @@ class _AccountScreenState extends State<AccountScreen> {
     final AppState state = AppScope.read(context);
     Navigator.of(context).popUntil((Route<dynamic> route) => route.isFirst);
     await state.signOut(clearLocalData: true);
+  }
+
+  /// Real end-to-end check of the GitHub session: the token identity, the app
+  /// installations, and — for the selected server — read/write access plus the
+  /// ability to list repository secrets (what the Playit key install needs).
+  Future<void> _testConnection() async {
+    setState(() {
+      _testing = true;
+      _testError = null;
+      _tokenStatus = null;
+      _secretStatus = null;
+    });
+    try {
+      final AppState state = AppScope.read(context);
+      await state.ensureTokenFresh();
+      final GhUser? me = await state.api.getUser();
+      final List<GhInstallation> installations = await state.api.listInstallations();
+      String secretStatus = L10n.t('connNoServer');
+      final ServerConfig? server = state.selected;
+      if (server != null) {
+        final GhRepo repo = await state.api.getRepo(server.repoOwner, server.repoName);
+        final List<String> names = await state.api.listSecretNames(server.repoOwner, server.repoName);
+        final bool canWrite = repo.permissionsPush;
+        secretStatus = L10n.f('connSecretsOk', <String, String>{
+          'count': '${names.length}',
+          'access': canWrite ? L10n.t('connWrite') : L10n.t('connReadOnly'),
+        });
+      }
+      if (!mounted) return;
+      setState(() {
+        _tokenStatus = L10n.f('connTokenOk', <String, String>{
+          'login': me?.login ?? '—',
+          'count': '${installations.length}',
+        });
+        _secretStatus = secretStatus;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _testError = Fmt.error(error));
+    } finally {
+      if (mounted) setState(() => _testing = false);
+    }
   }
 
   @override
@@ -239,8 +286,8 @@ class _AccountScreenState extends State<AccountScreen> {
                           ),
                           const SizedBox(height: 6),
                           InfoRow(
-                            label: L10n.t('managePlayit'),
-                            value: 'github.com',
+                            label: L10n.t('installationsTitle'),
+                            value: _loadingRepos ? '—' : '${_installations.length}',
                             icon: Icons.open_in_new_rounded,
                             onTap: () => launchUrl(Uri.parse(AppConfig.manageInstallationsUrl), mode: LaunchMode.externalApplication),
                           ),
@@ -367,6 +414,48 @@ class _CountBox extends StatelessWidget {
   final String value;
   final IconData icon;
 
+  /// Real end-to-end check of the GitHub session: the token identity, the app
+  /// installations, and — for the selected server — read/write access plus the
+  /// ability to list repository secrets (what the Playit key install needs).
+  Future<void> _testConnection() async {
+    setState(() {
+      _testing = true;
+      _testError = null;
+      _tokenStatus = null;
+      _secretStatus = null;
+    });
+    try {
+      final AppState state = AppScope.read(context);
+      await state.ensureTokenFresh();
+      final GhUser? me = await state.api.getUser();
+      final List<GhInstallation> installations = await state.api.listInstallations();
+      String secretStatus = L10n.t('connNoServer');
+      final ServerConfig? server = state.selected;
+      if (server != null) {
+        final GhRepo repo = await state.api.getRepo(server.repoOwner, server.repoName);
+        final List<String> names = await state.api.listSecretNames(server.repoOwner, server.repoName);
+        final bool canWrite = repo.permissionsPush;
+        secretStatus = L10n.f('connSecretsOk', <String, String>{
+          'count': '${names.length}',
+          'access': canWrite ? L10n.t('connWrite') : L10n.t('connReadOnly'),
+        });
+      }
+      if (!mounted) return;
+      setState(() {
+        _tokenStatus = L10n.f('connTokenOk', <String, String>{
+          'login': me?.login ?? '—',
+          'count': '${installations.length}',
+        });
+        _secretStatus = secretStatus;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _testError = Fmt.error(error));
+    } finally {
+      if (mounted) setState(() => _testing = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = context.nova;
@@ -401,6 +490,48 @@ class _PermissionRow extends StatelessWidget {
   final String label;
   final String text;
 
+  /// Real end-to-end check of the GitHub session: the token identity, the app
+  /// installations, and — for the selected server — read/write access plus the
+  /// ability to list repository secrets (what the Playit key install needs).
+  Future<void> _testConnection() async {
+    setState(() {
+      _testing = true;
+      _testError = null;
+      _tokenStatus = null;
+      _secretStatus = null;
+    });
+    try {
+      final AppState state = AppScope.read(context);
+      await state.ensureTokenFresh();
+      final GhUser? me = await state.api.getUser();
+      final List<GhInstallation> installations = await state.api.listInstallations();
+      String secretStatus = L10n.t('connNoServer');
+      final ServerConfig? server = state.selected;
+      if (server != null) {
+        final GhRepo repo = await state.api.getRepo(server.repoOwner, server.repoName);
+        final List<String> names = await state.api.listSecretNames(server.repoOwner, server.repoName);
+        final bool canWrite = repo.permissionsPush;
+        secretStatus = L10n.f('connSecretsOk', <String, String>{
+          'count': '${names.length}',
+          'access': canWrite ? L10n.t('connWrite') : L10n.t('connReadOnly'),
+        });
+      }
+      if (!mounted) return;
+      setState(() {
+        _tokenStatus = L10n.f('connTokenOk', <String, String>{
+          'login': me?.login ?? '—',
+          'count': '${installations.length}',
+        });
+        _secretStatus = secretStatus;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _testError = Fmt.error(error));
+    } finally {
+      if (mounted) setState(() => _testing = false);
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = context.nova;
@@ -423,6 +554,48 @@ class _SecurityLine extends StatelessWidget {
 
   final IconData icon;
   final String label;
+
+  /// Real end-to-end check of the GitHub session: the token identity, the app
+  /// installations, and — for the selected server — read/write access plus the
+  /// ability to list repository secrets (what the Playit key install needs).
+  Future<void> _testConnection() async {
+    setState(() {
+      _testing = true;
+      _testError = null;
+      _tokenStatus = null;
+      _secretStatus = null;
+    });
+    try {
+      final AppState state = AppScope.read(context);
+      await state.ensureTokenFresh();
+      final GhUser? me = await state.api.getUser();
+      final List<GhInstallation> installations = await state.api.listInstallations();
+      String secretStatus = L10n.t('connNoServer');
+      final ServerConfig? server = state.selected;
+      if (server != null) {
+        final GhRepo repo = await state.api.getRepo(server.repoOwner, server.repoName);
+        final List<String> names = await state.api.listSecretNames(server.repoOwner, server.repoName);
+        final bool canWrite = repo.permissionsPush;
+        secretStatus = L10n.f('connSecretsOk', <String, String>{
+          'count': '${names.length}',
+          'access': canWrite ? L10n.t('connWrite') : L10n.t('connReadOnly'),
+        });
+      }
+      if (!mounted) return;
+      setState(() {
+        _tokenStatus = L10n.f('connTokenOk', <String, String>{
+          'login': me?.login ?? '—',
+          'count': '${installations.length}',
+        });
+        _secretStatus = secretStatus;
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _testError = Fmt.error(error));
+    } finally {
+      if (mounted) setState(() => _testing = false);
+    }
+  }
 
   @override
   Widget build(BuildContext context) {

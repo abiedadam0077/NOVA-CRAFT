@@ -22,6 +22,7 @@ class GhRepo {
     required this.private,
     required this.description,
     this.defaultBranch = 'main',
+    this.permissionsPush = false,
   });
 
   final int id;
@@ -30,6 +31,10 @@ class GhRepo {
   final bool private;
   final String description;
   final String defaultBranch;
+
+  /// True when the API reports write access for the authenticated token. Used
+  /// by the connection check so the UI can state real access, not assumptions.
+  final bool permissionsPush;
 
   String get fullName => '$owner/$name';
 
@@ -42,6 +47,7 @@ class GhRepo {
       private: o['private'] as bool? ?? false,
       description: o['description'] as String? ?? '',
       defaultBranch: o['default_branch'] as String? ?? 'main',
+      permissionsPush: o['permissions'] is Map && (o['permissions'] as Map)['push'] == true,
     );
   }
 }

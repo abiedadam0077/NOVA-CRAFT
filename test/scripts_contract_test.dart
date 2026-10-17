@@ -60,10 +60,11 @@ void main() {
 
   group('Playit', () {
     test('the agent key is sent as a header and never echoed', () {
-      expect(playit.contains('Agent-Key'), isTrue);
+      expect(runner.contains('Authorization: Agent-Key \$PLAYIT_SECRET_KEY'), isTrue);
+      expect(playit.contains('Agent-Key'), isTrue); // documented in the contract
       expect(playit.contains('print(secret'), isFalse);
       expect(playit.contains('print(key'), isFalse);
-      expect(playit.contains('InvalidAgentKey'), isTrue);
+      expect(runner.contains('echo \"\$PLAYIT_SECRET_KEY\"'), isFalse);
     });
 
     test('the runner verifies the address Playit reported, not a hand-typed one', () {
@@ -73,9 +74,10 @@ void main() {
     });
 
     test('tunnel creation survives a refusal without inventing an address', () {
+      expect(runner.contains('/v1/tunnels/create'), isTrue);
       expect(playit.contains('tunnels/create'), isTrue);
-      expect(playit.contains('RequiresVerifiedAccount'), isTrue);
-      expect(runner.contains('TUNNEL_ADDR=""'), isTrue);
+      expect(runner.contains('TUNNEL_ADDR=\"\"'), isTrue);
+      expect(runner.contains('Playit refused automatic tunnel creation'), isTrue);
     });
   });
 

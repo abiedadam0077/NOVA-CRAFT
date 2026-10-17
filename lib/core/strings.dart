@@ -784,6 +784,14 @@ const Map<String, String> ar = <String, String>{
   'onboardingNote2': 'لا نوعد ببقاء السيرفر متصلًا دائمًا: التشغيل يتبع Runner الخاص بك.',
   'onboardingNote3': 'لا تُسجَّل المفاتيح في السجلات، ولا تُطلب كلمة مرور GitHub.',
   'continueWithGithub': 'المتابعة إلى GitHub',
+  'connectionCheckTitle': 'فحص اتصال GitHub',
+  'connectionCheckRun': 'فحص الآن',
+  'connectionCheckBody': 'يقرأ التطبيق هويتك وقائمة تثبيتاته ويختبر الوصول إلى Secrets في مستودع السيرفر المحدد. لا تُكتب أي أسرار أثناء الفحص.',
+  'connTokenOk': 'متصل كـ {login} · {count} تثبيت',
+  'connSecretsOk': 'Secrets: {count} مقروءة · وصول المستودع: {access}',
+  'connWrite': 'كتابة',
+  'connReadOnly': 'قراءة فقط',
+  'connNoServer': 'لا يوجد سيرفر محدد لفحص Secrets.',
 };
 
 const Map<String, String> en = <String, String>{
@@ -1529,4 +1537,12 @@ const Map<String, String> en = <String, String>{
   'onboardingNote2': 'We do not promise permanent uptime: runtime follows your own runner.',
   'onboardingNote3': 'Keys are never logged, and your GitHub password is never requested.',
   'continueWithGithub': 'Continue with GitHub',
+  'connectionCheckTitle': 'GitHub connection check',
+  'connectionCheckRun': 'Run check',
+  'connectionCheckBody': 'The app reads your identity and installations and tests access to Secrets in the selected server repository. No secret is written by the check.',
+  'connTokenOk': 'Signed in as {login} · {count} installation(s)',
+  'connSecretsOk': 'Secrets: {count} readable · repository access: {access}',
+  'connWrite': 'write',
+  'connReadOnly': 'read only',
+  'connNoServer': 'No server selected to test Secrets.',
 };
