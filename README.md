@@ -15,9 +15,13 @@ widget rendered with Material 3.
 
 Every successful CI run publishes a prerelease with directly downloadable APKs:
 
-- Latest releases: <https://github.com/abiedadam0077/NOVA-CRAFT/releases>
-- `NOVA-CRAFT-1.0.0-arm64-debugsigned.apk` — recommended for phones (arm64, ~25 MB)
-- `NOVA-CRAFT-1.0.0-release-debugsigned.apk` — universal build (~60 MB)
+- Latest verified build (run `39058403987`, arm64, 24,895,037 bytes):
+  <https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39058403987-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk>
+  - SHA-256: `0d6d97bfefd6d6eb29d8c31a7ae51ac1032c4c8684684793bc9882241ec447b3`
+- Universal build (`NOVA-CRAFT-1.0.0-release-debugsigned.apk`, ~60 MB), `SHA256SUMS.txt`,
+  package info and signature report:
+  <https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39058403987-1>
+- All releases: <https://github.com/abiedadam0077/NOVA-CRAFT/releases>
 
 The repository does not hold the original release keystore, so CI publishes **AOT release builds
 signed with the CI debug key**. They are installable previews, not production-signed releases, and
@@ -51,13 +55,15 @@ flutter build apk --release
 No physical Android device or authenticated GitHub account was available to this build, so the
 Device Flow sign-in, live repository discovery, starting a real server, console streaming, file
 editing, Modrinth installs, backups/restores and Playit.gg tunnels are **not** exercised end-to-end.
-Bedrock edition creation is intentionally unavailable in the UI. GitHub-hosted runners are not a
-24/7 host: a server stops when its workflow ends.
+Bedrock servers are created from Mojang's official Bedrock Dedicated Server download, and
+`.mcaddon` / `.mcpack` files are unpacked and registered in the world pack manifests; that path has
+not been exercised against a live Bedrock server either. GitHub-hosted runners are not a 24/7 host:
+a server stops when its workflow ends.
 
 ## Navigation and first run
 
-The app opens on a splash, then **GitHub Device Flow**, then **Playit.gg preparation**, then the
-first-server wizard. The navigation bar does not exist before a real server does, and it has
+The app opens on a splash, then a three-step onboarding, then **GitHub Device Flow**, then
+**Playit.gg preparation** (skippable, remembered), then the first-server wizard. The navigation bar does not exist before a real server does, and it has
 exactly five destinations:
 
 | # | Arabic | English | Contents |

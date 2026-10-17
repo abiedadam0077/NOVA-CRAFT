@@ -64,23 +64,29 @@
 - إنشاء/تحرير/حذف مع تأكيد، ورفع حتى 30MB.
 
 ### 2.5 المودات
-- تبويب Mods (Fabric فقط) وPlugins (Paper/Purpur/Spigot فقط).
-- فلترة Modrinth حسب loader + إصدار اللعبة، ورفض غير المتوافق برسالة.
-- المجلدات تُحسب من `serverRoot` لا من مسار ثابت.
+- تبويب Mods (Fabric/Quilt) وPlugins (Paper/Purpur/Spigot/Bukkit).
+- فلترة Modrinth حسب loader + إصدار اللعبة عبر عقد واحد (`modrinthCompatible`) يشاركه الاختبار والشاشة.
+- رفض غير المتوافق برسالة تذكر loader/الإصدار المطلوب مقابل المتوفر، ولا يُنزَّل الملف أصلاً.
+- مجلد التثبيت `server/mods` أو `server/plugins` مشتق من `serverRoot` (يدعم `dataPath` المخصص).
 
 ---
 
 ## 3. الاختبارات / Tests
 
-يُشغَّل على GitHub Actions: `flutter analyze` + `flutter test` (‏64 حالة اختبار في المصدر، ~70 عند التنفيذ) + بناء APK.
-آخر تشغيل ناجح: run `39039028088` — `flutter analyze` نظيف، كل الاختبارات ناجحة، وAPK تم التحقق منه.
+يُشغَّل على GitHub Actions: `flutter analyze` (صفر ملاحظات) + `flutter test` (**98 اختباراً، بلا تخطٍّ**) + بناء APK.
+آخر تشغيل ناجح: run `39058403987` على الالتزام `5ab0c5b` — تحليل نظيف، كل الاختبارات ناجحة،
+وAPK تم التحقق من حزمته وتوقيعه وبصمته داخل CI قبل النشر.
 
-### التحميل المباشر
-- arm64 (موصى به، ~24.8MB):
-  <https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39039028088-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk>
-- Universal (~60MB):
-  <https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39039028088-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk>
-- التحقق: <https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39039028088-1/SHA256SUMS.txt>
+### التحميل المباشر — البناء المتحقق `39058403987`
+- arm64 (موصى به للهواتف، 24,895,037 بايت):
+  <https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39058403987-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk>
+  `sha256:0d6d97bfefd6d6eb29d8c31a7ae51ac1032c4c8684684793bc9882241ec447b3`
+- Universal (60,375,999 بايت):
+  <https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39058403987-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk>
+  `sha256:f2d7c241adc1f29a5db1657c62190f95fec9c7637ae26d79f4e8b04ed9f4060b`
+- ملف البصمات: <https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39058403987-1/SHA256SUMS.txt>
+- التوقيع: مفتاح CI التجريبي (لا يوجد keystore إنتاجي في المستودع) — راجع `signature-verification.txt` في نفس الإصدار.
+- التثبيت: فعّل «تثبيت من مصادر غير معروفة» لهذا الملف فقط؛ لا يمكن تثبيته فوق نسخة موقّعة بمفتاح آخر دون إزالة السابقة.
 
 | ما تمت تغطيته | النوع |
 |---|---|
@@ -93,6 +99,7 @@
 | شريط التنقل: خمسة عناصر وبالترتيب المطلوب | Widget |
 | احتواء المسار داخل مجلد السيرفر | Widget/وحدة |
 | RTL/LTR وسلوك الأزرار والحالات | Widget |
+| توافق Modrinth: عائلات loader، فلترة الإصدار، مسارات `mods`/`plugins`، وتحليل الحمولة | وحدة (13) |
 
 ### ما لم يُختبر (بصراحة)
 - **لم يُشغَّل أي سيرفر Minecraft حقيقي** من هذا المستودع أثناء هذا التغيير (لا يوجد حساب Playit ولا أسرار في بيئة التطوير). لذلك: السكربت مُراجَع ومُغطّى باختبارات نصية، لكن الجاهزية الفعلية تحتاج أول تشغيل من التطبيق.
@@ -158,7 +165,7 @@
 | 6 | جاهزية حقيقية وفشل بدء | `runner_contract_test` (نشر سبب الفشل) + `scripts_contract_test` (حالة `status.json`) | آلي للنص؛ سيرفر حقيقي لم يُشغَّل |
 | 7 | تشغيل/إيقاف/إعادة تشغيل | `runner_contract_test`: `Stop and restart`، ومنع إعادة التشغيل بعد إيقاف صريح | آلي |
 | 8 | حالة Playit والعنوان المتحقق | `scripts_contract_test`: رأس Agent-Key، قراءة `TUNNEL_ADDR` فقط، رفض إنشاء نفق دون اختراع عنوان | آلي؛ مفتاح Playit حقيقي غير متوفر |
-| 9 | اكتشاف ملفات السيرفر فقط | `scripts_contract_test`: عزل الجذر، `path-outside-root`، فحص كل مدخل ZIP | آلي (واه) + تجربة fileops منفصلة |
+| 9 | اكتشاف ملفات السيرفر فقط | `scripts_contract_test`: عزل الجذر، `path-outside-root`، فحص كل مدخل ZIP | آلي (اختبار نصي) + تجربة fileops منفصلة |
 | 10 | فلاتر Modrinth والتوافق ومسارات التثبيت | **`modrinth_test.dart` (13 اختباراً)**: عائلات loader، فلترة إصدار اللعبة، رفض عدم التوافق، `server/mods` و`server/plugins` | آلي بالكامل |
 | 11 | رفع/تحقق/تثبيت/تنشيط Bedrock | `scripts_contract_test`: كتابة `world_*_packs.json` وترتيب التثبيت قبل التشغيل | آلي؛ فك حزمة `.mcaddon` حقيقية جرى يدوياً |
 | 12 | حفظ الإعدادات والتحقق منها | `runner_contract_test`: أولوية الإعدادات وإعادة توليد `server.properties`، وEULA اختياري | آلي |
