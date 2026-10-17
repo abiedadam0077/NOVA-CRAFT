@@ -3,6 +3,7 @@ name: Android Build
 on:
   push:
     branches: ["arena/8d2bcdd2-nova-craft", "main"]
+    tags: ["v*"]
   workflow_dispatch:
     inputs:
       release:
@@ -43,14 +44,14 @@ jobs:
           path: app/build/outputs/apk/debug/app-debug.apk
           retention-days: 14
       - name: Decode release keystore
-        if: ${{ inputs.release }}
+        if: ${{ inputs.release || startsWith(github.ref, 'refs/tags/v') }}
         env:
           KEYSTORE_BASE64: ${{ secrets.NOVA_KEYSTORE_BASE64 }}
         run: |
           if [ -z "$KEYSTORE_BASE64" ]; then echo "::error::NOVA_KEYSTORE_BASE64 secret is missing"; exit 1; fi
           echo "$KEYSTORE_BASE64" | base64 -d > "$RUNNER_TEMP/nova-release.p12"
       - name: Assemble signed release
-        if: ${{ inputs.release }}
+        if: ${{ inputs.release || startsWith(github.ref, 'refs/tags/v') }}
         env:
           NOVA_KEYSTORE_PATH: ${{ runner.temp }}/nova-release.p12
           NOVA_KEYSTORE_PASSWORD: ${{ secrets.NOVA_KEYSTORE_PASSWORD }}
@@ -58,13 +59,13 @@ jobs:
           NOVA_KEY_PASSWORD: ${{ secrets.NOVA_KEYSTORE_PASSWORD }}
         run: gradle assembleRelease --stacktrace
       - name: Verify release signature
-        if: ${{ inputs.release }}
+        if: ${{ inputs.release || startsWith(github.ref, 'refs/tags/v') }}
         run: |
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
           "$APKSIGNER" verify --verbose --print-certs app/build/outputs/apk/release/app-release.apk
           sha256sum app/build/outputs/apk/release/app-release.apk
       - name: Publish GitHub Release with APK
-        if: ${{ inputs.release }}
+        if: ${{ inputs.release || startsWith(github.ref, 'refs/tags/v') }}
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
@@ -73,7 +74,7 @@ jobs:
           gh release create "$TAG" app/build/outputs/apk/release/app-release.apk --title "NOVA CRAFT $TAG" --notes "NOVA CRAFT Android release (signed). Package: io.github.abiedadam0077.novacraft"
           echo "RELEASE_TAG=$TAG" >> "$GITHUB_ENV"
       - name: Upload release APK
-        if: ${{ inputs.release }}
+        if: ${{ inputs.release || startsWith(github.ref, 'refs/tags/v') }}
         uses: actions/upload-artifact@v4
         with:
           name: nova-craft-release
