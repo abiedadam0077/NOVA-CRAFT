@@ -96,7 +96,7 @@ void main() {
     });
 
     test('never prints the Playit secret', () {
-      expect(WorkflowTemplates.runnerScript.contains('echo "$PLAYIT_SECRET_KEY"'), isFalse);
+      expect(WorkflowTemplates.runnerScript.contains(r'echo "$PLAYIT_SECRET_KEY"'), isFalse);
       expect(WorkflowTemplates.runnerScript.contains('set -x'), isFalse);
     });
 
