@@ -6,6 +6,10 @@ name: Android launch smoke test
 # can be audited from outside the runner.
 
 on:
+  push:
+    paths:
+      - ".github/workflows/android-smoke.yml"
+      - "smoke-trigger.txt"
   workflow_dispatch:
     inputs:
       tag:
