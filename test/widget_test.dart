@@ -1,6 +1,7 @@
 import 'package:flutter/material.dart';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:nova_craft/core/models.dart';
+import 'package:nova_craft/core/strings.dart';
 import 'package:nova_craft/design/theme.dart';
 import 'package:nova_craft/design/tokens.dart';
 import 'package:nova_craft/design/widgets/buttons.dart';
@@ -20,6 +21,10 @@ Widget _host(Widget child, {TextDirection direction = TextDirection.rtl}) {
 }
 
 void main() {
+  setUp(() {
+    L10n.lang = 'ar';
+  });
+
   testWidgets('NovaButton shows its label and respects a null callback', (WidgetTester tester) async {
     await tester.pumpWidget(_host(NovaButton(label: 'Start server', onPressed: null)));
     expect(find.text('Start server'), findsOneWidget);
@@ -36,7 +41,7 @@ void main() {
   testWidgets('StatusPill renders the offline state', (WidgetTester tester) async {
     await tester.pumpWidget(_host(const StatusPill(phase: ServerPhase.offline)));
     expect(find.byType(StatusPill), findsOneWidget);
-    expect(find.text('غير متصل'), findsOneWidget);
+    expect(find.text(L10n.t('offline')), findsOneWidget);
   });
 
   testWidgets('AddressPill shows a placeholder when no address exists', (WidgetTester tester) async {
