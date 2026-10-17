@@ -14,3 +14,10 @@ nova-craft-signing/
 /signing.properties
 __pycache__/
 *.pyc
+.dart_tool/
+.flutter-plugins
+.flutter-plugins-dependencies
+android/local.properties
+android/.gradle/
+*.apk
+.flutter-plugins-dependencies
