@@ -594,7 +594,7 @@ class ServerRuntime {
     this.serverPid,
     this.playersOnline,
     this.playersMax,
-    this.version,
+    this.version = '',
     this.motd = '',
     this.latencyMs,
     this.tunnelStatus = '',

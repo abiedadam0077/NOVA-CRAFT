@@ -6,6 +6,7 @@ import '../../design/theme.dart';
 import '../../design/tokens.dart';
 import '../../design/widgets/background.dart';
 import '../../design/widgets/brand.dart';
+import '../../design/widgets/buttons.dart';
 import '../../design/widgets/display.dart';
 import '../../design/widgets/nav.dart';
 import '../../design/widgets/surfaces.dart';

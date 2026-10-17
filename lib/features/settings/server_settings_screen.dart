@@ -156,7 +156,7 @@ class _SettingsBodyState extends State<_SettingsBody> {
   Future<void> _changeVersion() async {
     final AppState state = AppScope.read(context);
     final ServerSoftware software = ServerSoftwareInfo.fromId(widget.server.software);
-    final List<String> versions = await showModalBottomSheet<List<String>>(
+    final List<String>? versions = await showModalBottomSheet<List<String>>(
       context: context,
       backgroundColor: Colors.transparent,
       isScrollControlled: true,
