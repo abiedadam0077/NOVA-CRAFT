@@ -23,7 +23,10 @@ val hasReleaseSigning = hasEnvSigning || hasFileSigning
 
 android {
     namespace = "io.github.abiedadam0077.novacraft"
-    compileSdk = 35
+    // Current AndroidX releases (pulled in by url_launcher and core) require
+    // API 36 to compile. targetSdk stays at 35 so runtime behaviour and the
+    // published permissions do not change.
+    compileSdk = 36
 
     compileOptions {
         sourceCompatibility = JavaVersion.VERSION_17

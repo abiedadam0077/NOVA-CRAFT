@@ -40,6 +40,14 @@ jobs:
       - name: Flutter version
         run: flutter --version
 
+      - name: Ensure Android SDK platform 36
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKMANAGER" ]; then
+            yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+            "$SDKMANAGER" "platforms;android-36" > /dev/null
+          fi
+
       - name: Resolve Dart packages
         run: flutter pub get
 
