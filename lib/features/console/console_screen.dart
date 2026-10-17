@@ -162,7 +162,6 @@ class _ConsoleViewState extends State<ConsoleView> {
   Widget build(BuildContext context) {
     final p = context.nova;
     final ServerMonitor monitor = widget.monitor;
-    final bool runActive = monitor.runActive;
     final List<LogEntry> raw = monitor.buildLogEntries();
     final bool cleared = _clearedRunId != null && _clearedRunId == monitor.run?.id;
     final String q = _search.text.trim().toLowerCase();

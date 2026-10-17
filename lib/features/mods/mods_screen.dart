@@ -272,7 +272,7 @@ class _ModsViewState extends State<ModsView> {
                         padding: const EdgeInsets.all(12),
                         decoration: BoxDecoration(
                           color: p.cardSoft,
-                          borderRadius: NovaRadii.md,
+                          borderRadius: NovaRadii.rMd,
                           border: Border.all(color: p.stroke),
                         ),
                         child: Row(
@@ -351,7 +351,6 @@ class _ModsViewState extends State<ModsView> {
 
   @override
   Widget build(BuildContext context) {
-    final p = context.nova;
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
@@ -664,7 +663,7 @@ class _ModsViewState extends State<ModsView> {
                               padding: const EdgeInsets.all(12),
                               decoration: BoxDecoration(
                                 color: p.cardSoft,
-                                borderRadius: NovaRadii.md,
+                                borderRadius: NovaRadii.rMd,
                                 border: Border.all(color: p.stroke),
                               ),
                               child: Row(

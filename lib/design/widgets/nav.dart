@@ -176,7 +176,7 @@ class _NavButton extends StatelessWidget {
         margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 9),
         decoration: BoxDecoration(
           color: selected ? active.withValues(alpha: 0.12) : Colors.transparent,
-          borderRadius: NovaRadii.md,
+          borderRadius: NovaRadii.rMd,
           border: selected ? Border.all(color: active.withValues(alpha: 0.22)) : null,
         ),
         child: Column(

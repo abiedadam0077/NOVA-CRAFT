@@ -139,7 +139,6 @@ class _Header extends StatelessWidget {
 
   @override
   Widget build(BuildContext context) {
-    final p = context.nova;
     return Row(
       children: <Widget>[
         const BrandLockup(markSize: 32, fontSize: 15, letterSpacing: 2.4),
@@ -539,7 +538,7 @@ class _RecentRuns extends StatelessWidget {
           padding: const EdgeInsets.symmetric(horizontal: 14, vertical: 12),
           decoration: BoxDecoration(
             color: p.cardSoft.withValues(alpha: 0.8),
-            borderRadius: NovaRadii.md,
+            borderRadius: NovaRadii.rMd,
             border: Border.all(color: p.stroke),
           ),
           child: Row(
@@ -603,7 +602,7 @@ class _NoServerCard extends StatelessWidget {
           ArtBanner(
             asset: 'assets/images/art_island.jpg',
             height: 190,
-            radius: 0,
+            radius: BorderRadius.zero,
             alignment: Alignment.center,
             child: Align(
               alignment: Alignment.bottomCenter,

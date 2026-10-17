@@ -281,7 +281,7 @@ class _NetworkViewState extends State<NetworkView> {
                   padding: const EdgeInsets.all(12),
                   decoration: BoxDecoration(
                     color: p.success.withValues(alpha: 0.10),
-                    borderRadius: NovaRadii.md,
+                    borderRadius: NovaRadii.rMd,
                     border: Border.all(color: p.success.withValues(alpha: 0.28)),
                   ),
                   child: Column(
@@ -300,11 +300,13 @@ class _NetworkViewState extends State<NetworkView> {
                       const SizedBox(height: 8),
                       Row(
                         children: <Widget>[
-                          _metric(p, L10n.t('ping'), _result!.latencyMs == null ? '—' : '${_result!.latencyMs} ms'),
+                          _metric(p, L10n.t('ping'), '${_result!.latencyMs} ms'),
                           _metric(
                             p,
                             L10n.t('players'),
-                            _result!.playersOnline == null ? '—' : '${_result!.playersOnline}/${_result!.playersMax ?? '?'}',
+                            _result!.playersOnline == null
+                                ? '—'
+                                : '${_result!.playersOnline}/${_result!.playersMax?.toString() ?? '?'}',
                           ),
                           _metric(p, L10n.t('versionLabel'), _result!.version ?? '—'),
                         ],

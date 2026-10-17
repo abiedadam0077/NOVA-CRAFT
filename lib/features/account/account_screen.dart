@@ -275,7 +275,7 @@ class _AccountScreenState extends State<AccountScreen> {
                                   children: <Widget>[
                                     Text('Playit.gg', style: NovaTextStyles.bodyStrong(p.text)),
                                     Text(
-                                      playitLinked ? (server?.connectionHostPort ?? '') : L10n.t('playitNotLinked'),
+                                      playitLinked && server != null ? server.connectionHostPort : L10n.t('playitNotLinked'),
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: NovaTextStyles.caption(p.textDim),
@@ -372,7 +372,7 @@ class _CountBox extends StatelessWidget {
       padding: const EdgeInsets.symmetric(vertical: 10, horizontal: 8),
       decoration: BoxDecoration(
         color: p.card,
-        borderRadius: NovaRadii.md,
+        borderRadius: NovaRadii.rMd,
         border: Border.all(color: p.stroke),
       ),
       child: Column(

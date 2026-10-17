@@ -502,7 +502,7 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
           padding: const EdgeInsets.all(13),
           decoration: BoxDecoration(
             color: selected ? p.primary.withValues(alpha: 0.12) : p.cardSoft,
-            borderRadius: NovaRadii.md,
+            borderRadius: NovaRadii.rMd,
             border: Border.all(color: selected ? p.primary.withValues(alpha: 0.55) : p.stroke),
           ),
           child: Row(

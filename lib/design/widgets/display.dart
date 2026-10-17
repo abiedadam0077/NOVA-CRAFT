@@ -1,3 +1,5 @@
+import 'dart:typed_data';
+
 import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 
@@ -5,6 +7,7 @@ import '../../core/models.dart';
 import '../../core/strings.dart';
 import '../theme.dart';
 import '../tokens.dart';
+import 'surfaces.dart';
 import 'buttons.dart';
 import 'feedback.dart';
 
@@ -192,7 +195,7 @@ class StatTile extends StatelessWidget {
         padding: const EdgeInsets.all(13),
         decoration: BoxDecoration(
           color: p.isDark ? p.cardSoft.withValues(alpha: 0.92) : Colors.white,
-          borderRadius: NovaRadii.md,
+          borderRadius: NovaRadii.rMd,
           border: Border.all(color: p.stroke),
         ),
         child: Column(

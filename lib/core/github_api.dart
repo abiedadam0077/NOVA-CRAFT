@@ -233,10 +233,10 @@ class GitHubApi {
     return GhRepo.fromJson(Map<String, dynamic>.from(data));
   }
 
-  Future<Map<String, dynamic>> getRepo(String owner, String repo) async {
+  Future<GhRepo> getRepo(String owner, String repo) async {
     final dynamic data = _decode(await _send('GET', '${AppConfig.githubApi}/repos/$owner/$repo'));
     if (data is! Map) throw ApiException(500, 'Unexpected repository response');
-    return Map<String, dynamic>.from(data);
+    return GhRepo.fromJson(Map<String, dynamic>.from(data));
   }
 
   // --------------------------------------------------------------- contents

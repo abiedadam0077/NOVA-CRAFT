@@ -131,7 +131,7 @@ class ArtBanner extends StatelessWidget {
 
   final String asset;
   final double height;
-  final double radius;
+  final BorderRadius radius;
   final Widget? child;
   final Alignment alignment;
   final bool scrim;
