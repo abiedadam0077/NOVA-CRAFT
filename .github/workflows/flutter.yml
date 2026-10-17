@@ -77,6 +77,14 @@ jobs:
             exit "$STATUS"
           fi
 
+      - name: Keep a stable Android debug signing key
+        uses: actions/cache@v4
+        with:
+          path: ~/.android/debug.keystore
+          key: android-debug-keystore-v1
+          restore-keys: |
+            android-debug-keystore-
+
       - name: Build APK
         env:
           NOVA_KEYSTORE_BASE64: ${{ secrets.NOVA_KEYSTORE_BASE64 }}
@@ -118,6 +126,15 @@ jobs:
             grep -q "versionName='1.0.0'" delivery/package-info.txt
             echo "== $APK" | tee -a delivery/signature-verification.txt
             "$APKSIGNER" verify --verbose --print-certs "$APK" | tee -a delivery/signature-verification.txt
+            # Hard requirements: v2 and v3 must verify. v1 (JAR) must also be
+            # present, otherwise third-party sideload tools report the APK as
+            # unsigned even though Android itself accepts it.
+            "$APKSIGNER" verify --verbose "$APK" | grep -q "Verified using v2 scheme (APK Signature Scheme v2): true"
+            "$APKSIGNER" verify --verbose "$APK" | grep -q "Verified using v3 scheme (APK Signature Scheme v3): true"
+            if ! jarsigner -verify "$APK" 2>&1 | grep -q "jar verified"; then
+              echo "::error::$APK has no valid JAR/v1 signature"
+              exit 1
+            fi
           done
           (cd delivery && sha256sum *.apk > SHA256SUMS.txt)
           du -h delivery/*.apk

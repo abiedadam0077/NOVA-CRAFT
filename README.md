@@ -13,21 +13,26 @@ widget rendered with Material 3.
 
 ## Download the latest APK
 
-Every successful CI run publishes a prerelease with directly downloadable APKs:
+Every successful CI run publishes a prerelease with directly downloadable APKs. Always use the
+**newest** release: earlier prereleases were built before the startup fix described in
+`docs/REBUILD_REPORT.md` §4 and must not be used.
 
-- Latest verified build (run `39058403987`, arm64, 24,895,037 bytes):
-  <https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39058403987-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk>
-  - SHA-256: `0d6d97bfefd6d6eb29d8c31a7ae51ac1032c4c8684684793bc9882241ec447b3`
-- Universal build (`NOVA-CRAFT-1.0.0-release-debugsigned.apk`, ~60 MB), `SHA256SUMS.txt`,
-  package info and signature report:
-  <https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39058403987-1>
-- All releases: <https://github.com/abiedadam0077/NOVA-CRAFT/releases>
+- All releases (newest first): <https://github.com/abiedadam0077/NOVA-CRAFT/releases>
+- Inside the newest release:
+  - `NOVA-CRAFT-1.0.0-arm64-debugsigned.apk` — arm64 phone build (~25 MB, `versionCode 2001`)
+  - `NOVA-CRAFT-1.0.0-release-debugsigned.apk` — universal build, arm64 + armv7 + x86_64 (~60 MB,
+    `versionCode 1`), the one the automated emulator test installs
+  - `SHA256SUMS.txt`, `package-info.txt`, `signature-verification.txt` — verified inside CI
 
-The repository does not hold the original release keystore, so CI publishes **AOT release builds
-signed with the CI debug key**. They are installable previews, not production-signed releases, and
-an APK signed by a different key cannot update an existing installation in place. When
-`NOVA_KEYSTORE_BASE64` / `NOVA_KEYSTORE_PASSWORD` / `NOVA_KEY_ALIAS` are configured, CI builds and
-publishes a normally signed release instead. No replacement release key is generated automatically.
+The repository does not hold a production keystore and the Actions token used here cannot create
+repository secrets, so CI publishes **AOT release builds signed with an Android debug certificate**.
+They are valid, verifiable APKs (JAR/v1 + v2 + v3 schemes, checked with `apksigner`), not
+production-signed releases: MT Manager and similar tools warn about the self-signed debug
+certificate, and an APK signed by a different key cannot update an existing installation in place.
+When `NOVA_KEYSTORE_BASE64` / `NOVA_KEYSTORE_PASSWORD` / `NOVA_KEY_ALIAS` / `NOVA_KEY_PASSWORD`
+exist as repository secrets, CI automatically builds a normally signed release instead — no code
+change is needed. The signing key that produced any installed copy must be kept: losing it means
+future builds can no longer update that installation.
 
 ## Build pipeline
 
