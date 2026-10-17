@@ -1250,6 +1250,8 @@ def apply_addons(data_root, addons_dir, state_path):
     except (OSError, ValueError):
         return {"ok": True, "installed": [], "skipped": [], "note": "no-addon-state"}
     world = state.get("world") or "Bedrock level"
+    if "/" in world or "\\" in world or world in (".", ".."):
+        world = "Bedrock level"
     level = safe_path(data_root, os.path.join("worlds", world))
     active = {"behavior": [], "resource": []}
     staging = os.path.join(addons_dir, ".staging")

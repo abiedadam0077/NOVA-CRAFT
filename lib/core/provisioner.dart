@@ -249,7 +249,9 @@ class Provisioner {
   }
 
   static String _safeFileName(String value) {
-    final String base = value.split(RegExp(r'[/\]')).last.trim();
+    final int slash = value.lastIndexOf('/');
+    final int backslash = value.lastIndexOf(r'\');
+    final String base = value.substring((slash > backslash ? slash : backslash) + 1).trim();
     final String cleaned = base.replaceAll(RegExp(r'[^A-Za-z0-9._ -]'), '_');
     if (cleaned.isEmpty || cleaned == '.' || cleaned == '..') return '';
     return cleaned.length > 120 ? cleaned.substring(cleaned.length - 120) : cleaned;
