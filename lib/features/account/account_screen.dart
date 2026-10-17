@@ -96,7 +96,9 @@ class _AccountScreenState extends State<AccountScreen> {
     final p = context.nova;
     final GhUser? user = state.user;
     final ServerConfig? server = state.selected;
-    final bool playitLinked = server != null && server.connectionHostPort.isNotEmpty;
+    final String playitLine = server == null || server.connectionHostPort.isEmpty
+        ? L10n.t('playitNotLinked')
+        : server.connectionHostPort;
 
     return Scaffold(
       backgroundColor: p.bg,
@@ -275,7 +277,7 @@ class _AccountScreenState extends State<AccountScreen> {
                                   children: <Widget>[
                                     Text('Playit.gg', style: NovaTextStyles.bodyStrong(p.text)),
                                     Text(
-                                      playitLinked && server != null ? server.connectionHostPort : L10n.t('playitNotLinked'),
+                                      playitLine,
                                       maxLines: 1,
                                       overflow: TextOverflow.ellipsis,
                                       style: NovaTextStyles.caption(p.textDim),

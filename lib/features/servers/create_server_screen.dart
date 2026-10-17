@@ -790,7 +790,7 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
                 style: NovaTextStyles.display(22, p.text),
               ),
               const SizedBox(height: 4),
-              Text('$_softwareName ${_version.isEmpty ? '' : '· $_version'}', style: NovaTextStyles.small(p.textMuted)),
+              Text('${_softwareName()} ${_version.isEmpty ? '' : '· $_version'}', style: NovaTextStyles.small(p.textMuted)),
             ],
           ),
         ),
@@ -801,7 +801,7 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
           child: Column(
             children: <Widget>[
               InfoRow(label: L10n.t('summaryEdition'), value: _edition == 'JAVA' ? 'Java' : 'Bedrock'),
-              InfoRow(label: L10n.t('summarySoftware'), value: _softwareName),
+              InfoRow(label: L10n.t('summarySoftware'), value: _softwareName()),
               InfoRow(label: L10n.t('summaryVersion'), value: _version.isEmpty ? '—' : _version),
               InfoRow(label: L10n.t('summaryRepo'), value: repo, monospace: true),
               InfoRow(label: L10n.t('summaryPlayers'), value: '$_players'),

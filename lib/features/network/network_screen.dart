@@ -308,7 +308,7 @@ class _NetworkViewState extends State<NetworkView> {
                                 ? '—'
                                 : '${_result!.playersOnline}/${_result!.playersMax?.toString() ?? '?'}',
                           ),
-                          _metric(p, L10n.t('versionLabel'), _result!.version ?? '—'),
+                          _metric(p, L10n.t('versionLabel'), _result!.version.isEmpty ? '—' : _result!.version),
                         ],
                       ),
                     ],

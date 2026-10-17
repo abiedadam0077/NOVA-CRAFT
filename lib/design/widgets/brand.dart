@@ -141,7 +141,7 @@ class ArtBanner extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = context.nova;
     return ClipRRect(
-      borderRadius: BorderRadius.circular(radius),
+      borderRadius: radius,
       child: SizedBox(
         height: height,
         width: double.infinity,
