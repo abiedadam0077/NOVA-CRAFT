@@ -89,7 +89,7 @@ void main() {
       expect(script.contains('sha256sum'), isTrue);
       expect(script.contains('tunnelAddress'), isTrue);
       expect(script.contains('Server started'), isTrue);
-      expect(script.contains('Done ('), isTrue);
+      expect(script.contains(r'Done \('), isTrue);
       expect(script.contains('gh release create'), isTrue);
       expect(script.contains('PLAYIT_SECRET_KEY'), isTrue);
       expect(script.contains('echo "eula=true"'), isTrue);
