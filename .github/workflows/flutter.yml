@@ -94,24 +94,33 @@ jobs:
             echo "BUILD_KIND=release" >> "$GITHUB_ENV"
           else
             echo "Release keystore secrets are unavailable in this repository."
-            echo "Delivering an explicitly labelled debug-signed APK; no new release key is generated."
-            flutter build apk --debug 2>&1 | tee /tmp/build.log
-            cp build/app/outputs/flutter-apk/app-debug.apk delivery/NOVA-CRAFT-1.0.0-debug.apk
-            echo "BUILD_KIND=debug" >> "$GITHUB_ENV"
+            echo "Delivering AOT release builds signed with the CI debug key; no new release key is generated."
+            flutter build apk --release --no-shrink 2>&1 | tee /tmp/build.log
+            cp build/app/outputs/flutter-apk/app-release.apk delivery/NOVA-CRAFT-1.0.0-release-debugsigned.apk
+            flutter build apk --release --no-shrink --split-per-abi 2>&1 | tee -a /tmp/build.log
+            if [ -f build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ]; then
+              cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk delivery/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk
+            fi
+            echo "BUILD_KIND=release (debug-signed)" >> "$GITHUB_ENV"
           fi
 
       - name: Verify APK package, signature and checksum
         run: |
           set -euo pipefail
-          APK=$(find delivery -name '*.apk' | head -1)
           AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt | sort -V | tail -1)
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
-          "$AAPT" dump badging "$APK" | tee delivery/package-info.txt
-          grep -q "package: name='io.github.abiedadam0077.novacraft'" delivery/package-info.txt
-          grep -q "versionName='1.0.0'" delivery/package-info.txt
-          "$APKSIGNER" verify --verbose --print-certs "$APK" | tee delivery/signature-verification.txt
+          : > delivery/package-info.txt
+          : > delivery/signature-verification.txt
+          for APK in delivery/*.apk; do
+            echo "== $APK" | tee -a delivery/package-info.txt
+            "$AAPT" dump badging "$APK" | head -6 | tee -a delivery/package-info.txt
+            grep -q "package: name='io.github.abiedadam0077.novacraft'" delivery/package-info.txt
+            grep -q "versionName='1.0.0'" delivery/package-info.txt
+            echo "== $APK" | tee -a delivery/signature-verification.txt
+            "$APKSIGNER" verify --verbose --print-certs "$APK" | tee -a delivery/signature-verification.txt
+          done
           (cd delivery && sha256sum *.apk > SHA256SUMS.txt)
-          du -h "$APK"
+          du -h delivery/*.apk
 
       - name: Upload verified APK and reports
         uses: actions/upload-artifact@v4
@@ -149,7 +158,8 @@ jobs:
             --prerelease \
             --title "NOVA CRAFT 1.0.0 (${BUILD_KIND} APK)" \
             --notes-file "$SUMMARY"
-          ASSET=$(basename "$(find delivery -name '*.apk' | head -1)")
+          ASSET=$(basename "$(find delivery -name '*arm64*.apk' | head -1)")
+          if [ -z "$ASSET" ]; then ASSET=$(basename "$(find delivery -name '*.apk' | head -1)"); fi
           URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ASSET}"
           echo "Download: $URL" >> "$GITHUB_STEP_SUMMARY"
           cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
