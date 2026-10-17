@@ -54,12 +54,49 @@ editing, Modrinth installs, backups/restores and Playit.gg tunnels are **not** e
 Bedrock edition creation is intentionally unavailable in the UI. GitHub-hosted runners are not a
 24/7 host: a server stops when its workflow ends.
 
+## Navigation and first run
+
+The app opens on a splash, then **GitHub Device Flow**, then **Playit.gg preparation**, then the
+first-server wizard. The navigation bar does not exist before a real server does, and it has
+exactly five destinations:
+
+| # | Arabic | English | Contents |
+|---|---|---|---|
+| 1 | الرئيسية | Home | server identity, real status, address, Start / Stop / Restart |
+| 2 | الكونسول | Console | real `nova-craft/live.log` tail (polling, never labelled live-streaming), commands, search, follow toggle |
+| 3 | الملفات | Files | only `server/` data — path containment enforced |
+| 4 | المودات | Mods | Modrinth mods (Fabric) and plugins (Paper/Purpur/Spigot), jar upload |
+| 5 | إعدادات السيرفر | Server settings | Minecraft settings + EULA, network/Playit, run cycle, backups, worlds, account, app settings |
+
+## Version and software support
+
+* **Vanilla** — official Mojang manifest (`piston-meta`), including `javaVersion.majorVersion`.
+* **Paper** — `fill.papermc.io/v3` only (the old `api.papermc.io/v2` was disabled on 2026-07-01),
+  stable channel, checksum verified via `sha256`.
+* **Purpur** — `api.purpurmc.org/v2`, latest build, MD5 verified.
+* **Fabric** — `meta.fabricmc.net/v2` with a stable loader + the vanilla server jar.
+* **Forge / NeoForge** — deliberately **not offered**: there is no reliable per-version resolution
+  path, and the app never shows versions it cannot actually download and run.
+
+Java is selected per version: `≤1.16 → 8`, `1.17 → 16`, `1.18–1.20.4 → 17`,
+`1.20.5+/1.21.x → 21`, `26.x → 25`.
+
 ## How a server runs
 
 Each server lives in its own GitHub repository containing `nova-craft/server.json`,
-`server/server.properties` and `.github/workflows/novacraft-server.yml`. A workflow cycle
-(max ~5h inside GitHub's 6h job limit) restores the latest backup Release, downloads the official
-server build, optionally starts the pinned Playit agent (`v1.0.10`) with the repo's
-`PLAYIT_SECRET_KEY` Actions secret, serves commands queued by the app, heartbeats to
-`nova-craft/status.json`, then saves, uploads a verified backup Release and optionally dispatches
-the next cycle. Ping/player counts are measured on the phone with real Java SLP / Bedrock RakNet pings.
+`nova-craft/config.py`, `nova-craft/runner.sh` and `.github/workflows/novacraft-server.yml`.
+A cycle (`timeout-minutes: 330`, inside GitHub's 6h limit):
+
+1. restores the Actions cache and, if present, the newest `backup-<id>-*` Release (checksum checked);
+2. rewrites `server.properties` from `server.json` so app edits always win over the cache;
+3. writes `eula.txt` **only** when the user accepted the EULA, otherwise refuses to start;
+4. downloads the server build and verifies its SHA-256/SHA-1/MD5;
+5. starts the Playit agent with `PLAYIT_SECRET_KEY`, reads the assigned public address from the
+   agent log and probes it over TCP before reporting the tunnel as connected;
+6. waits for a real `Done (Xs)!` / `Server started` line before publishing `ready`;
+7. publishes `nova-craft/status.json` every 30 s and the log tail to `nova-craft/live.log` every
+   ~30 s, and drains `nova-craft/commands/`;
+8. on stop: `save-off` → `save-all flush` → verified `world-backup.zip` Release → `stop`.
+
+Because a workflow is not a 24/7 host, the app states the cycle limit and relies on the next
+dispatch (or auto-restart) instead of pretending the server is always online.

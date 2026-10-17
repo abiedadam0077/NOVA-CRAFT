@@ -698,6 +698,7 @@ const Map<String, String> ar = <String, String>{
   'provisioningPlayit': 'تثبيت مفتاح Playit.gg...',
   'runnerLimitNote': 'يعمل السيرفر عبر GitHub Actions: الدورة الواحدة محدودة (~5.5 ساعة) وتعتمد على حدود GitHub، وليست استضافة دائمة 24/7.',
   'downloadedFile': 'تم حفظ الملف على الجهاز',
+  'mcVersion': 'إصدار ماينكرافت',
 };
 
 const Map<String, String> en = <String, String>{
@@ -1357,4 +1358,5 @@ const Map<String, String> en = <String, String>{
   'provisioningPlayit': 'Installing the Playit.gg secret…',
   'runnerLimitNote': 'The server runs on GitHub Actions: one cycle is capped (~5.5 h) and depends on GitHub limits — it is not permanent 24/7 hosting.',
   'downloadedFile': 'File saved to your device',
+  'mcVersion': 'Minecraft version',
 };

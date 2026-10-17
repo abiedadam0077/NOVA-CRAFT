@@ -173,7 +173,7 @@ class _NavButton extends StatelessWidget {
       child: AnimatedContainer(
         duration: NovaDurations.normal,
         curve: Curves.easeOutCubic,
-        margin: const EdgeInsets.symmetric(horizontal: 4, vertical: 9),
+        margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
         decoration: BoxDecoration(
           color: selected ? active.withValues(alpha: 0.12) : Colors.transparent,
           borderRadius: NovaRadii.rMd,
@@ -188,14 +188,18 @@ class _NavButton extends StatelessWidget {
               color: selected ? active : inactive,
             ),
             const SizedBox(height: 3),
-            Text(
+            Padding(
+              padding: const EdgeInsets.symmetric(horizontal: 2),
+              child: Text(
               item.label,
               maxLines: 1,
+              textAlign: TextAlign.center,
               overflow: TextOverflow.ellipsis,
               style: NovaTextStyles.small(selected ? active : inactive).copyWith(
-                fontSize: 9.5,
+                fontSize: item.label.length > 12 ? 8.4 : 9.5,
                 fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
               ),
+            ),
             ),
           ],
         ),

@@ -18,6 +18,7 @@ import '../../state/server_monitor.dart';
 import '../account/account_screen.dart';
 import '../backups/backups_screen.dart';
 import '../network/network_screen.dart';
+import '../servers/server_detail_screen.dart';
 import '../settings/settings_screen.dart';
 import '../worlds/worlds_screen.dart';
 
@@ -372,6 +373,7 @@ class _SettingsBodyState extends State<_SettingsBody> {
           icon: Icons.grid_view_rounded,
           child: Column(
             children: <Widget>[
+              _LinkRow(icon: Icons.insights_rounded, label: L10n.t('details'), onTap: () => _openPage(ServerDetailScreen(config: server))),
               _LinkRow(icon: Icons.backup_outlined, label: L10n.t('settingsBackups'), onTap: () => _openPage(BackupsView(config: server))),
               _LinkRow(icon: Icons.public_rounded, label: L10n.t('settingsWorlds'), onTap: () => _openPage(WorldsView(config: server))),
               _LinkRow(icon: Icons.palette_outlined, label: L10n.t('navSettings'), onTap: () => _openPage(const SettingsScreen(active: true))),
