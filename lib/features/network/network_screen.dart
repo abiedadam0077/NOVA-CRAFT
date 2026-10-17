@@ -19,10 +19,14 @@ import '../../design/widgets/surfaces.dart';
 import '../../state/app_state.dart';
 
 class NetworkView extends StatefulWidget {
-  const NetworkView({super.key, required this.config, this.active = true});
+  const NetworkView({super.key, required this.config, this.active = true, this.reportedAddress = ''});
 
   final ServerConfig config;
   final bool active;
+
+  /// Address the Playit agent reported in `status.json`. Shown when the config
+  /// has no manual override — it is never invented by the app.
+  final String reportedAddress;
 
   @override
   State<NetworkView> createState() => _NetworkViewState();
@@ -45,7 +49,7 @@ class _NetworkViewState extends State<NetworkView> {
   @override
   void initState() {
     super.initState();
-    _address.text = widget.config.connectionHostPort;
+    _address.text = widget.config.connectionHostPort.isEmpty ? widget.reportedAddress : widget.config.connectionHostPort;
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkSecret());
   }
 
@@ -56,19 +60,25 @@ class _NetworkViewState extends State<NetworkView> {
     super.dispose();
   }
 
-  String get _host => widget.config.connectionHostPort.isEmpty
+  String get _effectiveAddress {
+    final String configured = widget.config.connectionHostPort;
+    if (configured.isNotEmpty) return configured;
+    return widget.reportedAddress.replaceFirst('tcp://', '').replaceFirst('udp://').trim();
+  }
+
+  String get _host => _effectiveAddress.isEmpty
       ? ''
-      : Validation.parseHostPort(widget.config.connectionHostPort, widget.config.localPort).host;
+      : Validation.parseHostPort(_effectiveAddress, widget.config.localPort).host;
 
   String get _javaAddress {
     if (_host.isEmpty) return '';
-    final HostPort parsed = Validation.parseHostPort(widget.config.connectionHostPort, widget.config.playitJavaPort);
+    final HostPort parsed = Validation.parseHostPort(_effectiveAddress, widget.config.playitJavaPort);
     return '${parsed.host}:${parsed.port}';
   }
 
   String get _bedrockAddress {
     if (_host.isEmpty) return '';
-    final HostPort parsed = Validation.parseHostPort(widget.config.connectionHostPort, widget.config.playitBedrockPort);
+    final HostPort parsed = Validation.parseHostPort(_effectiveAddress, widget.config.playitBedrockPort);
     return '${parsed.host}:${parsed.port}';
   }
 

@@ -175,6 +175,8 @@ class _ConsoleViewState extends State<ConsoleView> {
 
     final Widget header = _ConsoleHeader(
       monitor: monitor,
+      follow: _follow,
+      onToggleFollow: () => setState(() => _follow = !_follow),
       searchOpen: _searchOpen,
       onToggleSearch: () => setState(() {
         _searchOpen = !_searchOpen;
@@ -238,7 +240,15 @@ class _ConsoleViewState extends State<ConsoleView> {
           Expanded(
             child: entries.isEmpty
                 ? _ConsolePlaceholder(monitor: monitor, cleared: cleared)
-                : Scrollbar(
+                : NotificationListener<ScrollNotification>(
+                    onNotification: (ScrollNotification notification) {
+                      if (notification is UserScrollNotification || notification is ScrollUpdateNotification) {
+                        final bool atBottom = notification.metrics.extentAfter < 24;
+                        if (atBottom != _follow) setState(() => _follow = atBottom);
+                      }
+                      return false;
+                    },
+                    child: Scrollbar(
                     controller: _scroll,
                     thumbVisibility: true,
                     child: ListView.builder(
@@ -270,6 +280,7 @@ class _ConsoleViewState extends State<ConsoleView> {
                         );
                       },
                     ),
+                  ),
                   ),
           ),
         ],
@@ -418,6 +429,8 @@ class _QueueNote extends StatelessWidget {
 class _ConsoleHeader extends StatelessWidget {
   const _ConsoleHeader({
     required this.monitor,
+    required this.follow,
+    required this.onToggleFollow,
     required this.searchOpen,
     required this.onToggleSearch,
     required this.onClear,
@@ -426,6 +439,8 @@ class _ConsoleHeader extends StatelessWidget {
   });
 
   final ServerMonitor monitor;
+  final bool follow;
+  final VoidCallback onToggleFollow;
   final bool searchOpen;
   final VoidCallback onToggleSearch;
   final VoidCallback onClear;
@@ -455,6 +470,13 @@ class _ConsoleHeader extends StatelessWidget {
             ),
           ),
         const Spacer(),
+        NovaChip(
+          label: L10n.t('consoleFollow'),
+          selected: follow,
+          icon: Icons.vertical_align_bottom_rounded,
+          onTap: onToggleFollow,
+        ),
+        const SizedBox(width: 6),
         NovaIconButton(
           icon: Icons.search_rounded,
           size: 34,

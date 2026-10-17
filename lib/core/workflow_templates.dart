@@ -88,9 +88,78 @@ jobs:
 """Expose nova-craft/server.json values as GitHub step outputs."""
 import json
 import os
+import sys
 
 with open("nova-craft/server.json", "r", encoding="utf-8") as handle:
     cfg = json.load(handle)
+
+
+def truthy(value):
+    return "true" if value else "false"
+
+
+def write_properties():
+    """Regenerate server.properties (and eula.txt) from server.json.
+
+    The Actions cache restores the whole data folder, so values committed in the
+    repository could otherwise be overwritten by an older cached copy. Writing
+    them again after the restore makes the app's settings authoritative.
+    """
+    root = cfg.get("dataPath") or "server"
+    os.makedirs(root, exist_ok=True)
+    bedrock = (cfg.get("edition") or "JAVA").upper() == "BEDROCK"
+    if bedrock:
+        lines = [
+            "server-name=%s" % cfg.get("name", "NOVA CRAFT"),
+            "gamemode=%s" % cfg.get("gamemode", "survival"),
+            "force-gamemode=false",
+            "difficulty=%s" % cfg.get("difficulty", "normal"),
+            "allow-cheats=false",
+            "max-players=%s" % cfg.get("maxPlayers", 20),
+            "online-mode=%s" % truthy(cfg.get("onlineMode", True)),
+            "allow-list=%s" % truthy(cfg.get("whiteList", False)),
+            "server-port=19132",
+            "server-portv6=19133",
+            "enable-lan-visibility=false",
+            "view-distance=%s" % cfg.get("viewDistance", 10),
+            "level-name=Bedrock level",
+            "level-seed=%s" % cfg.get("seed", ""),
+        ]
+    else:
+        lines = [
+            "#Minecraft server properties (managed by NOVA CRAFT)",
+            "level-seed=%s" % cfg.get("seed", ""),
+            "gamemode=%s" % cfg.get("gamemode", "survival"),
+            "level-name=world",
+            "motd=%s" % cfg.get("motd", "A NOVA CRAFT Server"),
+            "pvp=%s" % truthy(cfg.get("pvp", True)),
+            "difficulty=%s" % cfg.get("difficulty", "normal"),
+            "max-players=%s" % cfg.get("maxPlayers", 20),
+            "online-mode=%s" % truthy(cfg.get("onlineMode", True)),
+            "view-distance=%s" % cfg.get("viewDistance", 10),
+            "simulation-distance=%s" % cfg.get("simulationDistance", 10),
+            "server-port=25565",
+            "white-list=%s" % truthy(cfg.get("whiteList", False)),
+            "enforce-whitelist=%s" % truthy(cfg.get("whiteList", False)),
+            "allow-nether=true",
+            "spawn-animals=true",
+            "spawn-monsters=true",
+            "spawn-npcs=true",
+        ]
+    with open(os.path.join(root, "server.properties"), "w", encoding="utf-8") as handle:
+        handle.write("\n".join(lines) + "\n")
+    if not bedrock:
+        eula_path = os.path.join(root, "eula.txt")
+        if cfg.get("eulaAccepted"):
+            with open(eula_path, "w", encoding="utf-8") as handle:
+                handle.write("eula=true\n")
+        elif os.path.exists(eula_path):
+            os.remove(eula_path)
+
+
+if "--write-props" in sys.argv:
+    write_properties()
+    sys.exit(0)
 
 out = os.environ["GITHUB_OUTPUT"]
 values = {
@@ -165,21 +234,18 @@ put_file() {
   if [ "$current" = "$text" ]; then return 0; fi
   sha="$(api_content_sha "$path")"
   payload="$(mktemp)"
-  python3 - "$text" > "$payload" <<'PY'
-import base64, json, os, sys
-print(json.dumps({"message": os.environ.get("MSG", "nova: update"),
-                  "content": base64.b64encode(sys.argv[1].encode()).decode(),
-                  "branch": os.environ.get("REF", "main")}))
-PY
-  if [ -n "$sha" ] && [ "$sha" != "null" ]; then
-    python3 - "$payload" "$sha" <<'PY'
-import json, sys
-p = sys.argv[1]
-d = json.load(open(p))
-d["sha"] = sys.argv[2]
-json.dump(d, open(p, "w"))
-PY
-  fi
+  python3 - "$text" "$message" "$REF" "$sha" > "$payload" <<'PYJSON'
+import base64, json, sys
+text, message, ref, sha = sys.argv[1:5]
+body = {
+    "message": message or "nova: update",
+    "content": base64.b64encode(text.encode()).decode(),
+    "branch": ref or "main",
+}
+if sha and sha != "null":
+    body["sha"] = sha
+print(json.dumps(body))
+PYJSON
   if ! gh api -X PUT "repos/$REPO/contents/$path" --input "$payload" > /dev/null 2>&1; then
     log "WARN could not publish $path"
     rm -f "$payload"
@@ -222,7 +288,7 @@ PY
 )"
   if [ "$json" != "$STATUS_LAST" ]; then
     STATUS_LAST="$json"
-    MSG="nova: status $phase" REF="$REF" put_file "nova-craft/status.json" "$json" || true
+    put_file "nova-craft/status.json" "$json" "nova: status $phase" || true
   fi
 }
 
@@ -233,7 +299,7 @@ publish_live() {
   tail_text="$(tail -n 260 "$file" | tail -c 45000)"
   if [ "$tail_text" != "$LIVE_LAST" ]; then
     LIVE_LAST="$tail_text"
-    MSG="nova: live log" REF="$REF" put_file "nova-craft/live.log" "$tail_text" || true
+    put_file "nova-craft/live.log" "$tail_text" "nova: live log" || true
   fi
 }
 
@@ -256,7 +322,7 @@ print(json.dumps({
 }, ensure_ascii=False, indent=2))
 PY
 )"
-  MSG="nova: cycle $conclusion" REF="$REF" put_file "nova-craft/status.json" "$json" || true
+  put_file "nova-craft/status.json" "$json" "nova: cycle $conclusion" || true
 }
 
 verify_hash() {
@@ -358,6 +424,9 @@ if [ -n "$RESTORE_TAG" ]; then
   fi
   rm -rf "$TMPD"
 fi
+
+# Settings from the app always win over the cached copy.
+python3 nova-craft/config.py --write-props || log "WARN could not rewrite server.properties"
 
 if [ -f "$INCOMING/world.zip" ]; then
   log "applying imported world"
