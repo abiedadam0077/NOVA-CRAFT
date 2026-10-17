@@ -109,33 +109,46 @@ jobs:
           } | tee smoke/kvm.txt
 
       - name: Install and launch on emulator
-        uses: ReactiveCircus/android-emulator-runner@v2
-        with:
-          api-level: 30
-          target: default
-          arch: x86_64
-          profile: pixel_2
-          disable-animations: true
-          emulator-boot-timeout: 420
-          ram-size: 2048
-          heap-size: 512
-          emulator-options: -no-window -no-audio -no-boot-anim -no-snapshot -gpu swiftshader_indirect
-          script: |
-            set -uo pipefail
-            echo "abi: $(adb shell getprop ro.product.cpu.abilist | tr -d '\r')" > smoke/device.txt
-            adb logcat -c
-            adb install -r "$APK" > smoke/install.txt 2>&1
-            echo "install_exit=$?" >> smoke/install.txt
-            adb shell am start -W -n "$PACKAGE/.MainActivity" > smoke/start.txt 2>&1
-            echo "start_exit=$?" >> smoke/start.txt
-            sleep 15
-            adb shell pidof "$PACKAGE" > smoke/pid.txt 2>&1 || true
-            adb shell dumpsys activity activities > smoke/activities.txt 2>&1 || true
-            adb shell dumpsys package "$PACKAGE" > smoke/package.txt 2>&1 || true
-            adb exec-out screencap -p > smoke/screen.png 2>/dev/null || true
-            adb logcat -d -v threadtime > smoke/logcat-full.txt 2>&1 || true
-            grep -E "AndroidRuntime|FATAL|libflutter|flutter|Nova|novacraft|Impeller|signal|crash" smoke/logcat-full.txt | tail -400 > smoke/logcat.txt || true
-            cat smoke/install.txt smoke/start.txt smoke/pid.txt smoke/device.txt
+        timeout-minutes: 25
+        run: |
+          set -uo pipefail
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          AVDMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
+          echo "## Emulator setup" > smoke/emulator.txt
+          sudo apt-get update -qq >> smoke/emulator.txt 2>&1 || true
+          sudo apt-get install -y -qq libpulse0 libnss3 libxcomposite1 libxcursor1 libxi6 libxtst6 libglu1-mesa >> smoke/emulator.txt 2>&1 || true
+          yes | "$SDKMANAGER" --licenses >> smoke/emulator.txt 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "emulator" "system-images;android-30;default;x86_64" >> smoke/emulator.txt 2>&1 || true
+          echo no | "$AVDMANAGER" create avd -n nova30 -k "system-images;android-30;default;x86_64" -d pixel_2 --force >> smoke/emulator.txt 2>&1 || true
+          nohup "$ANDROID_HOME/emulator/emulator" -avd nova30 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -accel on -verbose > smoke/emulator.log 2>&1 &
+          echo "emulator_pid=$!" >> smoke/emulator.txt
+          adb start-server >> smoke/emulator.txt 2>&1 || true
+          adb wait-for-device >> smoke/emulator.txt 2>&1 || true
+          BOOTED=0
+          for i in $(seq 1 120); do
+            B=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
+            if [ "$B" = "1" ]; then BOOTED=1; break; fi
+            sleep 3
+          done
+          echo "booted=$BOOTED" >> smoke/emulator.txt
+          echo "abi: $(adb shell getprop ro.product.cpu.abilist 2>/dev/null | tr -d '\r')" > smoke/device.txt
+          if [ "$BOOTED" != "1" ]; then
+            echo "emulator did not boot" >> smoke/device.txt
+            exit 1
+          fi
+          adb logcat -c
+          adb install -r "$APK" > smoke/install.txt 2>&1
+          echo "install_exit=$?" >> smoke/install.txt
+          adb shell am start -W -n "$PACKAGE/.MainActivity" > smoke/start.txt 2>&1
+          echo "start_exit=$?" >> smoke/start.txt
+          sleep 20
+          adb shell pidof "$PACKAGE" > smoke/pid.txt 2>&1 || true
+          adb shell dumpsys activity activities > smoke/activities.txt 2>&1 || true
+          adb shell dumpsys package "$PACKAGE" > smoke/package.txt 2>&1 || true
+          adb exec-out screencap -p > smoke/screen.png 2>/dev/null || true
+          adb logcat -d -v threadtime > smoke/logcat-full.txt 2>&1 || true
+          grep -E "AndroidRuntime|FATAL|libflutter|flutter|Nova|novacraft|Impeller|signal|crash" smoke/logcat-full.txt | tail -400 > smoke/logcat.txt || true
+          cat smoke/install.txt smoke/start.txt smoke/pid.txt smoke/device.txt
 
       - name: Build the evidence report
         if: always()
@@ -155,6 +168,14 @@ jobs:
             echo "- Device:"
             echo '```'
             cat smoke/device.txt 2>/dev/null || echo 'no device data'
+            echo '```'
+            echo "- Emulator setup:"
+            echo '```'
+            tail -30 smoke/emulator.txt 2>/dev/null || echo 'not run'
+            echo '```'
+            echo "- Emulator log (tail):"
+            echo '```'
+            tail -40 smoke/emulator.log 2>/dev/null || echo 'no emulator log'
             echo '```'
             echo "- Install:"
             echo '```'
