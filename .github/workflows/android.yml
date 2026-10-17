@@ -87,18 +87,12 @@ jobs:
             app/build/outputs/androidTest-results/
           if-no-files-found: error
           retention-days: 30
-      - name: Publish failure log
-        if: failure()
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          tail -n 180 /tmp/build.log > /tmp/fail.txt || true
-          python3 .github/scripts/post_failure.py || true
       - name: Publish directly downloadable APK only after tests pass
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          exec > >(tee /tmp/publication.log) 2>&1
           python3 .github/scripts/delivery-report.py
           TAG="apk-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
           gh release create "$TAG" delivery/* --target "$GITHUB_SHA" --prerelease --title "NOVA CRAFT 1.0.0 ($BUILD_KIND, tested APK)" --notes-file delivery/TEST-REPORT.md
@@ -108,3 +102,10 @@ jobs:
           (cd "$RUNNER_TEMP/download-check" && sha256sum -c "$GITHUB_WORKSPACE/delivery/SHA256SUMS.txt")
           echo "Release: https://github.com/$GITHUB_REPOSITORY/releases/tag/$TAG" >> "$GITHUB_STEP_SUMMARY"
           cat delivery/TEST-REPORT.md >> "$GITHUB_STEP_SUMMARY"
+      - name: Publish diagnostic on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          { tail -n 120 /tmp/build.log; tail -n 100 /tmp/publication.log; find app/build/outputs/androidTest-results -name '*.xml'; } > /tmp/fail.txt 2>&1 || true
+          python3 .github/scripts/post_failure.py || true

@@ -11,3 +11,6 @@
 *.p12
 *.pem
 nova-craft-signing/
+/signing.properties
+__pycache__/
+*.pyc
