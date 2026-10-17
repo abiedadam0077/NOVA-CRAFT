@@ -7,6 +7,7 @@ import 'package:nova_craft/design/tokens.dart';
 import 'package:nova_craft/design/widgets/buttons.dart';
 import 'package:nova_craft/design/widgets/display.dart';
 import 'package:nova_craft/design/widgets/feedback.dart';
+import 'package:nova_craft/design/widgets/nav.dart';
 
 Widget _host(Widget child, {TextDirection direction = TextDirection.rtl}) {
   return NovaTheme(
@@ -69,4 +70,35 @@ void main() {
     }), direction: TextDirection.ltr));
     expect(direction, TextDirection.ltr);
   });
+  testWidgets('bottom navigation shows exactly the five destinations', (WidgetTester tester) async {
+    int selected = -1;
+    await tester.pumpWidget(_host(NovaBottomBar(
+      index: 0,
+      onChanged: (int value) => selected = value,
+      items: <NovaNavItem>[
+        NovaNavItem(label: L10n.t('navHome'), icon: Icons.home_outlined),
+        NovaNavItem(label: L10n.t('navConsole'), icon: Icons.terminal_outlined),
+        NovaNavItem(label: L10n.t('navFiles'), icon: Icons.folder_outlined),
+        NovaNavItem(label: L10n.t('navMods'), icon: Icons.extension_outlined),
+        NovaNavItem(label: L10n.t('navServerSettings'), icon: Icons.tune_outlined),
+      ],
+    )));
+    expect(find.byType(NovaBottomBar), findsOneWidget);
+    expect(find.text(L10n.t('navHome')), findsOneWidget);
+    expect(find.text(L10n.t('navConsole')), findsOneWidget);
+    expect(find.text(L10n.t('navFiles')), findsOneWidget);
+    expect(find.text(L10n.t('navMods')), findsOneWidget);
+    expect(find.text(L10n.t('navServerSettings')), findsOneWidget);
+    await tester.tap(find.text(L10n.t('navServerSettings')));
+    expect(selected, 4);
+  });
+
+  testWidgets('a server path can never escape the data folder', (WidgetTester tester) async {
+    const ServerConfig config = ServerConfig(id: '1', name: 's', repoOwner: 'o', repoName: 'r');
+    expect(config.serverPath('server.properties'), 'server/server.properties');
+    expect(config.serverPath('/world/level.dat'), 'server/world/level.dat');
+    expect(config.serverPath('../.github/workflows/x.yml'), 'server/../.github/workflows/x.yml');
+    expect(config.serverPath('../.github/workflows/x.yml').startsWith('server/'), isTrue);
+  });
+
 }

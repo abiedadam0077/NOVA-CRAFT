@@ -26,7 +26,8 @@ void main() {
       expect(config.localPort, 25565);
       expect(config.supportsPlugins, isTrue);
       expect(config.supportsMods, isFalse);
-      expect(config.modsFolder, 'server/plugins');
+      expect(config.modsFolder, 'plugins');
+      expect(config.serverPath('plugins'), 'server/plugins');
     });
 
     test('bedrock servers expose the bedrock defaults', () {
@@ -42,7 +43,8 @@ void main() {
       expect(bedrock.isBedrock, isTrue);
       expect(bedrock.localPort, 19132);
       expect(bedrock.supportsPlugins, isFalse);
-      expect(bedrock.modsFolder, 'server/behavior_packs');
+      expect(bedrock.modsFolder, 'behavior_packs');
+      expect(bedrock.serverPath('behavior_packs'), 'server/behavior_packs');
     });
 
     test('json round trip preserves every field', () {
@@ -65,7 +67,8 @@ void main() {
       final ServerConfig fabric = config.copyWith(software: 'FABRIC');
       expect(fabric.supportsMods, isTrue);
       expect(fabric.supportsPlugins, isFalse);
-      expect(fabric.modsFolder, 'server/mods');
+      expect(fabric.modsFolder, 'mods');
+      expect(fabric.serverPath('mods'), 'server/mods');
     });
   });
 
@@ -117,8 +120,12 @@ void main() {
       expect(yaml.contains('srv-42'), isTrue);
       expect(yaml.contains('restore_tag'), isTrue);
       expect(yaml.contains('PLAYIT_SECRET_KEY'), isTrue);
-      expect(yaml.contains('nova-craft/status.json'), isTrue);
+      expect(yaml.contains('nova-craft/runner.sh'), isTrue);
+      expect(yaml.contains('nova-craft/config.py'), isTrue);
       expect(yaml.contains('concurrency'), isTrue);
+      expect(yaml.contains('timeout-minutes: 330'), isTrue);
+      expect(yaml.contains('restore-keys'), isTrue);
+      expect(yaml.contains('actions/cache/restore'), isTrue);
     });
 
     test('java properties reflect the server config', () {
