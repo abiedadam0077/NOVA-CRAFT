@@ -19,7 +19,7 @@ on:
       apk_glob:
         description: Glob used to pick one APK from the release
         required: true
-        default: "*arm64*.apk"
+        default: "*release-debugsigned.apk"
 
 permissions:
   contents: write
@@ -27,7 +27,7 @@ permissions:
 env:
   PACKAGE: io.github.abiedadam0077.novacraft
   TAG: ${{ inputs.tag || 'flutter-apk-39058403987-1' }}
-  APK_GLOB: ${{ inputs.apk_glob || '*arm64*.apk' }}
+  APK_GLOB: ${{ inputs.apk_glob || '*release-debugsigned.apk' }}
 
 jobs:
   smoke:
