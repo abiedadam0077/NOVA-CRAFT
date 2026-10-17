@@ -1011,10 +1011,6 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
         return 'Purpur';
       case 'FABRIC':
         return 'Fabric';
-      case 'FORGE':
-        return 'Forge';
-      case 'NEOFORGE':
-        return 'NeoForge';
       default:
         return 'Vanilla';
     }

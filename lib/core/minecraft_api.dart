@@ -92,7 +92,7 @@ class MinecraftApi {
   final http.Client _client;
 
   static const String _manifestUrl = 'https://piston-meta.mojang.com/mc/game/version_manifest_v2.json';
-  static const String _fillApi = 'https://fill.papermc.io/v3';
+  static const String _paperApi = 'https://api.papermc.io/v2';
   static const String _purpurApi = 'https://api.purpurmc.org/v2/purpur';
   static const String _fabricMeta = 'https://meta.fabricmc.net/v2';
 
@@ -170,74 +170,58 @@ class MinecraftApi {
   /// receiving builds on 2025-12-31 and is disabled since 2026-07-01, so the
   /// Fill v3 API is the only source used here.
   Future<List<String>> paperVersions() async {
-    final dynamic data = await _getJson('$_fillApi/projects/paper');
+    final dynamic data = await _getJson('$_paperApi/projects/paper');
     final List<String> out = <String>[];
-    if (data is Map && data['versions'] is Map) {
-      final Map<String, dynamic> groups = Map<String, dynamic>.from(data['versions'] as Map);
-      for (final dynamic value in groups.values) {
-        if (value is List) {
-          for (final dynamic v in value) {
-            final String id = v.toString();
-            if (_isReleaseId(id) && !out.contains(id)) out.add(id);
-          }
-        }
+    if (data is Map && data['versions'] is List) {
+      for (final dynamic v in data['versions'] as List) {
+        final String id = v.toString();
+        if (_isReleaseId(id) && !out.contains(id)) out.add(id);
       }
     }
-    return out;
+    out.sort(_compareMcVersions);
+    return out.reversed.toList();
   }
 
   Future<ResolvedDownload> resolvePaper(String version) async {
     Map<String, dynamic>? chosen;
-    try {
-      final dynamic data = await _getJson('$_fillApi/projects/paper/versions/$version/builds');
-      final dynamic list = data is Map ? data['builds'] : data;
-      if (list is List) {
-        for (final dynamic raw in list) {
-          if (raw is! Map) continue;
-          final Map<String, dynamic> build = Map<String, dynamic>.from(raw);
-          final String channel = build['channel']?.toString().toUpperCase() ?? '';
-          if (channel == 'STABLE' || channel == 'RECOMMENDED') {
-            chosen = build;
-            break;
-          }
+    final dynamic data = await _getJson('$_paperApi/projects/paper/versions/$version/builds');
+    final dynamic list = data is Map ? data['builds'] : null;
+    if (list is List) {
+      for (final dynamic raw in list.reversed) {
+        if (raw is! Map) continue;
+        final Map<String, dynamic> build = Map<String, dynamic>.from(raw);
+        final String channel = build['channel']?.toString().toUpperCase() ?? 'DEFAULT';
+        if (channel == 'DEFAULT' || channel == 'STABLE' || channel == 'RECOMMENDED') {
+          chosen = build;
+          break;
         }
       }
-    } on ApiException {
-      chosen = null;
     }
+    
     if (chosen == null) {
-      // Some projects answer the version's build list with a single object.
-      try {
-        final dynamic latest = await _getJson('$_fillApi/projects/paper/versions/$version/builds/latest');
-        if (latest is Map) {
-          final Map<String, dynamic> build = Map<String, dynamic>.from(latest);
-          final String channel = build['channel']?.toString().toUpperCase() ?? '';
-          if (channel == 'STABLE' || channel == 'RECOMMENDED') chosen = build;
-        }
-      } on ApiException {
-        chosen = null;
-      }
+      throw ApiException(404, 'Paper has no stable build for $version');
     }
-    if (chosen == null) {
-      throw ApiException(404, 'Paper has no stable build for $version (experimental builds are not used)');
-    }
+    
     final Map<String, dynamic> downloads = chosen['downloads'] is Map
         ? Map<String, dynamic>.from(chosen['downloads'] as Map)
         : <String, dynamic>{};
-    final Map<String, dynamic> server = downloads['server:default'] is Map
-        ? Map<String, dynamic>.from(downloads['server:default'] as Map)
+    final Map<String, dynamic> application = downloads['application'] is Map
+        ? Map<String, dynamic>.from(downloads['application'] as Map)
         : <String, dynamic>{};
-    final String url = server['url']?.toString() ?? '';
-    if (url.isEmpty) throw ApiException(404, 'Paper build for $version has no server download');
-    final Map<String, dynamic> checksums = server['checksums'] is Map
-        ? Map<String, dynamic>.from(server['checksums'] as Map)
-        : <String, dynamic>{};
-    final int buildId = (chosen['id'] as num?)?.toInt() ?? 0;
+        
+    final String name = application['name']?.toString() ?? '';
+    final String sha256 = application['sha256']?.toString() ?? '';
+    final int buildId = (chosen['build'] as num?)?.toInt() ?? 0;
+    
+    if (name.isEmpty) throw ApiException(404, 'Paper build for $version has no server download');
+    
+    final String url = '$_paperApi/projects/paper/versions/$version/builds/$buildId/downloads/$name';
+    
     return ServerBuild(
       software: ServerSoftware.paper,
       mcVersion: version,
       url: url,
-      hash: checksums['sha256']?.toString() ?? '',
+      hash: sha256,
       hashKind: 'sha256',
       javaMajor: javaForMc(version),
       label: 'Paper $version #$buildId',
