@@ -17,8 +17,17 @@ Every successful CI run publishes a prerelease with directly downloadable APKs. 
 **newest** release: earlier prereleases were built before the startup fix described in
 `docs/REBUILD_REPORT.md` §4 and must not be used.
 
+- **Build with the startup fix (run `39066803308`, commit `cd67bfe`):**
+  <https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39066803308-1>
+  - arm64 phone build (24,962,517 bytes):
+    <https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39066803308-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk>
+    - SHA-256: `666b274db1758350482c7826011a209466696b32a58e4a966edcae8c189376fd`
+  - universal build (60,476,929 bytes):
+    <https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39066803308-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk>
+    - SHA-256: `6c4c61dbd97cdd6fb639a2e8fd068321fbe88f7a84a735d5a3a0b06927991d74`
+  - `SHA256SUMS.txt`, `package-info.txt`, `signature-verification.txt` in the same release.
 - All releases (newest first): <https://github.com/abiedadam0077/NOVA-CRAFT/releases>
-- Inside the newest release:
+- Inside any newer release:
   - `NOVA-CRAFT-1.0.0-arm64-debugsigned.apk` — arm64 phone build (~25 MB, `versionCode 2001`)
   - `NOVA-CRAFT-1.0.0-release-debugsigned.apk` — universal build, arm64 + armv7 + x86_64 (~60 MB,
     `versionCode 1`), the one the automated emulator test installs
