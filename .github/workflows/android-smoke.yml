@@ -127,7 +127,7 @@ jobs:
           echo no | "$AVDMANAGER" create avd -n nova30 -k "system-images;android-30;default;x86_64" --force > smoke/avd.txt 2>&1 || true
           "$AVDMANAGER" list avd >> smoke/avd.txt 2>&1 || true
           ls -la "$ANDROID_AVD_HOME" >> smoke/avd.txt 2>&1 || true
-          nohup "$ANDROID_HOME/emulator/emulator" -avd nova30 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -accel on -verbose > smoke/emulator.log 2>&1 &
+          nohup "$ANDROID_HOME/emulator/emulator" -avd nova30 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -accel on -memory 1536 -cores 2 -feature -Vulkan -verbose > smoke/emulator.log 2>&1 &
           echo "emulator_pid=$!" >> smoke/emulator.txt
           "$ANDROID_HOME/emulator/emulator" -accel-check >> smoke/emulator.txt 2>&1 || true
           adb start-server >> smoke/emulator.txt 2>&1 || true
@@ -147,9 +147,10 @@ jobs:
             exit 1
           fi
           adb logcat -c
+          nohup adb logcat -v threadtime > smoke/logcat-live.txt 2>&1 &
           adb install -r "$APK" > smoke/install.txt 2>&1
           echo "install_exit=$?" >> smoke/install.txt
-          adb shell am start -W -n "$PACKAGE/.MainActivity" > smoke/start.txt 2>&1
+          timeout 60 adb shell am start -W -n "$PACKAGE/.MainActivity" > smoke/start.txt 2>&1
           echo "start_exit=$?" >> smoke/start.txt
           sleep 20
           adb shell pidof "$PACKAGE" > smoke/pid.txt 2>&1 || true
@@ -157,8 +158,14 @@ jobs:
           adb shell dumpsys package "$PACKAGE" > smoke/package.txt 2>&1 || true
           adb exec-out screencap -p > smoke/screen.png 2>/dev/null || true
           adb logcat -d -v threadtime > smoke/logcat-full.txt 2>&1 || true
-          grep -E "AndroidRuntime|FATAL|libflutter|flutter|Nova|novacraft|Impeller|signal|crash" smoke/logcat-full.txt | tail -400 > smoke/logcat.txt || true
-          cat smoke/install.txt smoke/start.txt smoke/pid.txt smoke/device.txt
+          cp smoke/logcat-live.txt smoke/logcat-live-kept.txt 2>/dev/null || true
+          grep -E "AndroidRuntime|FATAL|libflutter|flutter|Nova|novacraft|Impeller|signal|crash|Displayed" smoke/logcat-full.txt | tail -400 > smoke/logcat.txt || true
+          grep -E "Displayed|NOVA|Status:|LaunchState" smoke/logcat-live-kept.txt smoke/start.txt > smoke/frames.txt 2>&1 || true
+          cat smoke/install.txt smoke/start.txt smoke/pid.txt smoke/device.txt smoke/frames.txt
+          if [ -z "$(tr -d '\r' < smoke/pid.txt)" ]; then
+            echo "app_not_running_after_launch" >> smoke/device.txt
+            exit 1
+          fi
 
       - name: Build the evidence report
         if: always()
