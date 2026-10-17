@@ -127,6 +127,9 @@ class AppState extends ChangeNotifier {
     api.accessToken = accessToken;
     sessionExpired = false;
     user = await api.getUser();
+    // Load the server list before announcing the session, so the first-run
+    // gate never flashes the wizard for an account that already has servers.
+    loadingServers = true;
     notifyListeners();
     await refreshServers();
   }
