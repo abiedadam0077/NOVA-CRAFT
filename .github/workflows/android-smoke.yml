@@ -109,17 +109,22 @@ jobs:
           } | tee smoke/kvm.txt
 
       - name: Install and launch on emulator
-        timeout-minutes: 25
+        timeout-minutes: 30
         run: |
           set -uo pipefail
+          export ANDROID_AVD_HOME="$HOME/.android/avd"
+          mkdir -p "$ANDROID_AVD_HOME"
+          export PATH="$ANDROID_HOME/platform-tools:$ANDROID_HOME/emulator:$ANDROID_HOME/cmdline-tools/latest/bin:$PATH"
           SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
           AVDMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/avdmanager"
-          echo "## Emulator setup" > smoke/emulator.txt
+          : > smoke/emulator.txt
           sudo apt-get update -qq >> smoke/emulator.txt 2>&1 || true
           sudo apt-get install -y -qq libpulse0 libnss3 libxcomposite1 libxcursor1 libxi6 libxtst6 libglu1-mesa >> smoke/emulator.txt 2>&1 || true
-          yes | "$SDKMANAGER" --licenses >> smoke/emulator.txt 2>&1 || true
-          "$SDKMANAGER" "platform-tools" "emulator" "system-images;android-30;default;x86_64" >> smoke/emulator.txt 2>&1 || true
-          echo no | "$AVDMANAGER" create avd -n nova30 -k "system-images;android-30;default;x86_64" -d pixel_2 --force >> smoke/emulator.txt 2>&1 || true
+          yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+          "$SDKMANAGER" "platform-tools" "emulator" "system-images;android-30;default;x86_64" > smoke/sdk-install.txt 2>&1 || true
+          echo no | "$AVDMANAGER" create avd -n nova30 -k "system-images;android-30;default;x86_64" --force > smoke/avd.txt 2>&1 || true
+          "$AVDMANAGER" list avd >> smoke/avd.txt 2>&1 || true
+          ls -la "$ANDROID_AVD_HOME" >> smoke/avd.txt 2>&1 || true
           nohup "$ANDROID_HOME/emulator/emulator" -avd nova30 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -accel on -verbose > smoke/emulator.log 2>&1 &
           echo "emulator_pid=$!" >> smoke/emulator.txt
           adb start-server >> smoke/emulator.txt 2>&1 || true
@@ -175,7 +180,7 @@ jobs:
             echo '```'
             echo "- Emulator log (tail):"
             echo '```'
-            tail -40 smoke/emulator.log 2>/dev/null || echo 'no emulator log'
+            tail -25 smoke/emulator.log 2>/dev/null || echo 'no emulator log'
             echo '```'
             echo "- Install:"
             echo '```'
