@@ -109,7 +109,7 @@ jobs:
           } | tee smoke/kvm.txt
 
       - name: Install and launch on emulator
-        timeout-minutes: 22
+        timeout-minutes: 32
         run: |
           set -uo pipefail
           export ANDROID_AVD_HOME="$HOME/.android/avd"
@@ -128,14 +128,16 @@ jobs:
           nohup "$ANDROID_HOME/emulator/emulator" -avd nova30 -no-window -no-audio -no-boot-anim -gpu swiftshader_indirect -no-snapshot -accel on -verbose > smoke/emulator.log 2>&1 &
           echo "emulator_pid=$!" >> smoke/emulator.txt
           adb start-server >> smoke/emulator.txt 2>&1 || true
-          timeout 240 adb wait-for-device >> smoke/emulator.txt 2>&1 || true
+          timeout 300 adb wait-for-device >> smoke/emulator.txt 2>&1 || true
           BOOTED=0
-          for i in $(seq 1 100); do
+          for i in $(seq 1 200); do
             B=$(adb shell getprop sys.boot_completed 2>/dev/null | tr -d '\r')
             if [ "$B" = "1" ]; then BOOTED=1; break; fi
             sleep 3
           done
           echo "booted=$BOOTED" >> smoke/emulator.txt
+          adb devices >> smoke/emulator.txt 2>&1 || true
+          grep -iE "error|fail|kvm|accel|panic" smoke/emulator.log | tail -40 >> smoke/emulator.txt 2>&1 || true
           echo "abi: $(adb shell getprop ro.product.cpu.abilist 2>/dev/null | tr -d '\r')" > smoke/device.txt
           if [ "$BOOTED" != "1" ]; then
             echo "emulator did not boot" >> smoke/device.txt

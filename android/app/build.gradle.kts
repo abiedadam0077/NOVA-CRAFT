@@ -46,6 +46,15 @@ android {
     }
 
     signingConfigs {
+        // Keep a JAR (v1) signature alongside v2/v3. Modern Android only needs
+        // v2, but v1 is what many sideload/inspection tools verify; AGP omits it
+        // by default when minSdk >= 24, which made third-party tools report the
+        // APK as unsigned even though Android accepted it.
+        getByName("debug") {
+            enableV1Signing = true
+            enableV2Signing = true
+            enableV3Signing = true
+        }
         if (hasReleaseSigning) {
             create("release") {
                 if (hasFileSigning) {
@@ -59,6 +68,9 @@ android {
                     keyAlias = envKeyAlias
                     keyPassword = envKeyPassword
                 }
+                enableV1Signing = true
+                enableV2Signing = true
+                enableV3Signing = true
             }
         }
     }
