@@ -41,18 +41,13 @@ fun NovaRoot(vm: AppViewModel = viewModel()) {
                 LaunchedEffect(Unit) { onboarded = vm.store.getSetting("onboarded") == "1" }
                 when {
                     !auth.checked || onboarded == null -> SplashScreen()
-                    onboarded == false -> WelcomeScreen(vm) { scopeLaunch(vm) { vm.setOnboarded() }; onboarded = true }
+                    onboarded == false -> WelcomeScreen(vm) { vm.setOnboarded(); onboarded = true }
                     auth.user == null -> AuthScreen(vm)
                     else -> MainScaffold(vm)
                 }
             }
         }
     }
-}
-
-private fun scopeLaunch(vm: AppViewModel, block: suspend () -> Unit) {
-    // helper kept tiny; actual work runs in VM scope via fire-and-forget below
-    kotlinx.coroutines.MainScope().launch { block() }
 }
 
 @Composable

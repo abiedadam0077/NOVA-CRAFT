@@ -23,6 +23,8 @@ import androidx.compose.ui.text.AnnotatedString
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import io.github.abiedadam0077.novacraft.core.*
+import kotlinx.coroutines.CancellationException
+import kotlinx.coroutines.Job
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
 import java.util.UUID
@@ -58,6 +60,8 @@ fun AuthScreen(vm: AppViewModel) {
     val auth by vm.auth.collectAsState()
     var device by remember { mutableStateOf<DeviceCode?>(null) }
     var busy by remember { mutableStateOf(false) }; var error by remember { mutableStateOf<String?>(null) }; var polling by remember { mutableStateOf(false) }
+    var pollJob by remember { mutableStateOf<Job?>(null) }
+    DisposableEffect(Unit) { onDispose { pollJob?.cancel() } }
     Column(Modifier.fillMaxSize().padding(24.dp).verticalScroll(rememberScrollState())) {
         Text(vm.t("connect_github"), style = MaterialTheme.typography.headlineMedium, fontWeight = FontWeight.Bold)
         Spacer(Modifier.height(8.dp)); Text(vm.t("device_instructions"))
@@ -82,19 +86,33 @@ fun AuthScreen(vm: AppViewModel) {
                 if (polling) { LinearProgressIndicator(Modifier.fillMaxWidth()); Spacer(Modifier.height(6.dp)); Text(vm.t("waiting")) }
                 Button(enabled = !polling, onClick = {
                     polling = true; error = null
-                    scope.launch {
-                        val dc = device!!; val deadline = System.currentTimeMillis() + dc.expiresIn * 1000L
-                        while (System.currentTimeMillis() < deadline) {
-                            when (val r = vm.api.pollDeviceToken(vm.clientId, dc.deviceCode)) {
-                                is TokenPoll.Success -> { try { vm.onLoggedIn(r.accessToken, r.refreshToken, r.expiresIn) } catch (e: Exception) { error = e.message }; polling = false; return@launch }
-                                is TokenPoll.Pending -> delay(dc.interval * 1000L + 500)
-                                is TokenPoll.Failure -> { error = r.message; polling = false; return@launch }
+                    pollJob = scope.launch {
+                        val dc = device!!
+                        val deadline = System.currentTimeMillis() + dc.expiresIn * 1000L
+                        var intervalMs = dc.interval.coerceAtLeast(5) * 1000L
+                        try {
+                            while (System.currentTimeMillis() < deadline) {
+                                delay(intervalMs)
+                                when (val r = vm.api.pollDeviceToken(vm.clientId, dc.deviceCode)) {
+                                    is TokenPoll.Success -> {
+                                        vm.onLoggedIn(r.accessToken, r.refreshToken, r.expiresIn)
+                                        return@launch
+                                    }
+                                    is TokenPoll.Pending -> if (r.error == "slow_down") intervalMs += 5000L
+                                    is TokenPoll.Failure -> { error = r.message; return@launch }
+                                }
                             }
+                            error = "Code expired"
+                        } catch (e: CancellationException) {
+                            throw e
+                        } catch (e: Exception) {
+                            error = e.message ?: "Connection failed. Please retry."
+                        } finally {
+                            polling = false
                         }
-                        error = "Code expired"; polling = false
                     }
                 }, modifier = Modifier.fillMaxWidth()) { Text(vm.t("waiting")) }
-                TextButton(onClick = { device = null; polling = false }) { Text(vm.t("cancel")) }
+                TextButton(onClick = { pollJob?.cancel(); pollJob = null; device = null; polling = false }) { Text(vm.t("cancel")) }
             }
         }
         error?.let { Spacer(Modifier.height(10.dp)); Text(it, color = MaterialTheme.colorScheme.error) }

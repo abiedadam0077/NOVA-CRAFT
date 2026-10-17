@@ -21,6 +21,7 @@ android {
         applicationId = "io.github.abiedadam0077.novacraft"
         minSdk = 26
         targetSdk = 35
+        testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
         versionCode = 1
         versionName = "1.0.0"
         buildConfigField("String", "GITHUB_CLIENT_ID", "\"Iv23linL1Tf6ResSgUqL\"")
@@ -80,6 +81,21 @@ dependencies {
     implementation("com.goterl:lazysodium-android:5.1.0@aar")
     implementation("net.java.dev.jna:jna:5.14.0@aar")
     debugImplementation("androidx.compose.ui:ui-tooling")
+    androidTestImplementation(composeBom)
+    androidTestImplementation("androidx.compose.ui:ui-test-junit4")
+    androidTestImplementation("androidx.test.ext:junit:1.2.1")
+    androidTestImplementation("androidx.test:runner:1.6.2")
     testImplementation("junit:junit:4.13.2")
     testImplementation("org.json:json:20240303")
+}
+
+// Never silently deliver an unsigned APK when the release task is requested.
+tasks.configureEach {
+    if (name == "preReleaseBuild" || name == "validateSigningRelease") {
+        doFirst {
+            require(signValue("storeFile", "NOVA_KEYSTORE_PATH").isNotBlank()) {
+                "Release signing is unavailable; use the explicitly labelled debug APK instead."
+            }
+        }
+    }
 }
