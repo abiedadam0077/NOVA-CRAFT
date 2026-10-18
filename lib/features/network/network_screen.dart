@@ -48,7 +48,6 @@ class _NetworkViewState extends State<NetworkView> {
 
   bool _testing = false;
   bool _saving = false;
-  bool _savingSecret = false;
   bool _linkingPlayit = false;
   bool _pollingPlayit = false;
   bool _secretPresent = false;
@@ -188,31 +187,16 @@ class _NetworkViewState extends State<NetworkView> {
         setState(() => _secretError = L10n.t('playitLinkTimeout'));
       }
     } catch (error) {
-      if (mounted) setState(() => _secretError = Fmt.error(error));
+      if (mounted) {
+        setState(() => _secretError = Fmt.error(error));
+      }
     } finally {
-      if (mounted) setState(() {
+      if (mounted) {
+        setState(() {
         _linkingPlayit = false;
         _pollingPlayit = false;
       });
-    }
-  }
-
-  Future<void> _saveSecret() async {
-    final String value = _secret.text.trim();
-    if (value.isEmpty) return;
-    setState(() => _savingSecret = true);
-    try {
-      final AppState state = AppScope.read(context);
-      await Provisioner.writePlayitSecret(state.api, widget.config, value);
-      _secret.clear();
-      if (!mounted) return;
-      showNovaToast(context, L10n.t('secretSaved'), kind: ToastKind.success);
-      await _checkSecret();
-    } catch (error) {
-      if (!mounted) return;
-      showNovaToast(context, Fmt.error(error), kind: ToastKind.error);
-    } finally {
-      if (mounted) setState(() => _savingSecret = false);
+      }
     }
   }
 
