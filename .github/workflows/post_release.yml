@@ -7,25 +7,21 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: Download Artifacts
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          gh run download 39082711898 --dir out || true
-          find out -type f || true
-          cat out/nova-craft-flutter-39082711898/SHA256SUMS.txt > sha256.txt || true
-          echo "Release creation"
-          if [ -f "out/nova-craft-flutter-39082711898/SHA256SUMS.txt" ]; then
-            TAG="final-release-39082711898"
-            gh release create "$TAG" out/nova-craft-flutter-39082711898/* \
-              --target "$GITHUB_SHA" \
-              --title "NOVA CRAFT Final Fixes APK" \
-              --notes "Final Delivery for Arena Session." || true
-          fi
-      - name: Commit SHA
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+      - run: flutter pub get
+      - run: flutter build apk --release
+      - name: Commit APK
         run: |
           git config --global user.name "bot"
           git config --global user.email "bot@bot.com"
-          git add sha256.txt || true
-          git commit -m "Add sha256" || true
+          cp build/app/outputs/flutter-apk/app-release.apk nova-craft-final.apk
+          sha256sum nova-craft-final.apk > final_sha256.txt
+          git add nova-craft-final.apk final_sha256.txt
+          git commit -m "Add final apk" || true
           git push origin ${{ github.ref }} || true
