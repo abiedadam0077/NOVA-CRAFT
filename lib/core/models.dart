@@ -172,6 +172,7 @@ class ReleaseInfo {
     required this.assets,
     required this.prerelease,
     required this.isDraft,
+    this.body = '',
   });
 
   final int id;
@@ -181,8 +182,21 @@ class ReleaseInfo {
   final List<ReleaseAsset> assets;
   final bool prerelease;
   final bool isDraft;
+  final String body;
 
   int get totalSize => assets.fold(0, (sum, a) => sum + a.size);
+  ReleaseAsset? get backupArchive => _assetNamed('world-backup.zip');
+  ReleaseAsset? get backupChecksum => _assetNamed('world-backup.sha256');
+  bool get hasBackupAssets => backupArchive != null && backupChecksum != null;
+  bool isBackupFor(String serverId) => !isDraft && tag.startsWith('backup-$serverId-') && hasBackupAssets;
+  bool get isVerifiedBackup => hasBackupAssets && body.contains('NOVA_CRAFT_BACKUP_VERIFIED');
+
+  ReleaseAsset? _assetNamed(String name) {
+    for (final ReleaseAsset asset in assets) {
+      if (asset.name == name && asset.size > 0) return asset;
+    }
+    return null;
+  }
 
   DateTime? get createdAtDate => DateTime.tryParse(createdAt)?.toLocal();
 
@@ -209,6 +223,7 @@ class ReleaseInfo {
       assets: assets,
       prerelease: o['prerelease'] as bool? ?? false,
       isDraft: o['draft'] as bool? ?? false,
+      body: o['body']?.toString() ?? '',
     );
   }
 }
@@ -330,7 +345,9 @@ class ServerConfig {
     this.playitJavaPort = 25565,
     this.playitBedrockPort = 19132,
     this.playitTunnelName = '',
+    this.playitTunnelId = '',
     this.autoRestart = true,
+    this.backupRetention = 10,
     this.createdAt = '',
     this.allowCommands = true,
     this.eulaAccepted = false,
@@ -365,7 +382,9 @@ class ServerConfig {
   final int playitJavaPort;
   final int playitBedrockPort;
   final String playitTunnelName;
+  final String playitTunnelId;
   final bool autoRestart;
+  final int backupRetention;
   final String createdAt;
   final bool allowCommands;
   final bool eulaAccepted;
@@ -448,7 +467,9 @@ class ServerConfig {
     int? playitJavaPort,
     int? playitBedrockPort,
     String? playitTunnelName,
+    String? playitTunnelId,
     bool? autoRestart,
+    int? backupRetention,
     String? createdAt,
     bool? allowCommands,
     bool? eulaAccepted,
@@ -483,7 +504,9 @@ class ServerConfig {
       playitJavaPort: playitJavaPort ?? this.playitJavaPort,
       playitBedrockPort: playitBedrockPort ?? this.playitBedrockPort,
       playitTunnelName: playitTunnelName ?? this.playitTunnelName,
+      playitTunnelId: playitTunnelId ?? this.playitTunnelId,
       autoRestart: autoRestart ?? this.autoRestart,
+      backupRetention: backupRetention ?? this.backupRetention,
       createdAt: createdAt ?? this.createdAt,
       allowCommands: allowCommands ?? this.allowCommands,
       eulaAccepted: eulaAccepted ?? this.eulaAccepted,
@@ -521,7 +544,9 @@ class ServerConfig {
         'playitJavaPort': playitJavaPort,
         'playitBedrockPort': playitBedrockPort,
         'playitTunnelName': playitTunnelName,
+        'playitTunnelId': playitTunnelId,
         'autoRestart': autoRestart,
+        'backupRetention': backupRetention,
         'createdAt': createdAt,
         'allowCommands': allowCommands,
         'eulaAccepted': eulaAccepted,
@@ -580,7 +605,9 @@ class ServerConfig {
       playitJavaPort: integer('playitJavaPort', 25565),
       playitBedrockPort: integer('playitBedrockPort', 19132),
       playitTunnelName: str('playitTunnelName'),
+      playitTunnelId: str('playitTunnelId'),
       autoRestart: boolean('autoRestart', true),
+      backupRetention: integer('backupRetention', 10).clamp(2, 30).toInt(),
       createdAt: str('createdAt'),
       allowCommands: boolean('allowCommands', true),
       eulaAccepted: hasFlag ? boolean('eulaAccepted', false) : str('edition', 'JAVA').toUpperCase() != 'BEDROCK',
@@ -613,6 +640,7 @@ class ServerRuntime {
     this.gamePort,
     this.rssMb,
     this.tunnelName = '',
+    this.tunnelId = '',
     this.tunnelProtocol = '',
     this.tunnelOfflineReasons = const <String>[],
     this.agentId = '',
@@ -626,7 +654,7 @@ class ServerRuntime {
   final String version;
   final String motd;
   final int? latencyMs;
-  final String tunnelStatus; // connected | connecting | missing | error | unknown
+  final String tunnelStatus; // connected | connecting | allocated | missing | disabled | error | unknown
   final String tunnelMessage;
   /// Public `host:port` the Playit agent reported. Empty until the agent has
   /// actually been assigned a tunnel — never synthesised.
@@ -638,6 +666,7 @@ class ServerRuntime {
   final int? gamePort;
   final int? rssMb;
   final String tunnelName;
+  final String tunnelId;
   final String tunnelProtocol;
   final List<String> tunnelOfflineReasons;
   final String agentId;
@@ -680,6 +709,7 @@ class ServerRuntime {
       gamePort: numOrNull('gamePort'),
       rssMb: numOrNull('rssMb'),
       tunnelName: o['tunnelName']?.toString() ?? '',
+      tunnelId: o['tunnelId']?.toString() ?? '',
       tunnelProtocol: o['tunnelProtocol']?.toString() ?? '',
       tunnelOfflineReasons: (o['tunnelOfflineReasons'] as List?)?.map((dynamic e) => e.toString()).toList() ?? const <String>[],
       agentId: o['agentId']?.toString() ?? '',

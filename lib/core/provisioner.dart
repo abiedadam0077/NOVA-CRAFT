@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'github_api.dart';
 import 'models.dart';
+import 'validation.dart';
 import 'workflow_templates.dart';
 
 /// Writes the files that turn a repository into a NOVA CRAFT server, and
@@ -100,6 +101,9 @@ class Provisioner {
   }
 
   static Future<void> restoreBackup(GitHubApi api, ServerConfig c, String tag) {
+    if (!tag.startsWith('backup-${c.id}-') || !RegExp(r'^backup-[A-Za-z0-9_-]+$').hasMatch(tag)) {
+      throw ApiException(400, 'Backup tag does not belong to this server');
+    }
     return api.dispatch(
       c.repoOwner,
       c.repoName,
@@ -112,19 +116,40 @@ class Provisioner {
     return api.cancelRun(c.repoOwner, c.repoName, runId);
   }
 
-  static Future<void> sendCommand(GitHubApi api, ServerConfig c, String command) async {
+  static Future<void> sendCommand(
+    GitHubApi api,
+    ServerConfig c,
+    String command, {
+    bool confirmedDangerous = false,
+    bool system = false,
+  }) async {
     final String trimmed = command.trim();
-    if (trimmed.isEmpty || trimmed.length > 512) {
-      throw ApiException(400, 'Command is empty or too long');
+    if (!Validation.isSafeConsoleCommand(trimmed)) {
+      throw ApiException(400, 'Command is empty, too long, or contains control characters');
+    }
+    final String commandRoot = trimmed.toLowerCase().replaceFirst(RegExp(r'^/'), '');
+    if (!system && commandRoot.startsWith('nova:')) {
+      throw ApiException(400, 'The nova: command namespace is reserved for the system');
+    }
+    if (!system && !c.allowCommands) {
+      throw ApiException(403, 'Console commands are disabled in this server configuration');
+    }
+    if (!system && Validation.isDangerousCommand(trimmed) && !confirmedDangerous) {
+      throw ApiException(400, 'This command requires explicit confirmation');
     }
     final String name = '$commandsPath/${DateTime.now().millisecondsSinceEpoch}-${_randomSuffix()}.txt';
     final String? sha = await api.fileSha(c.repoOwner, c.repoName, name);
     await api.putText(c.repoOwner, c.repoName, name, trimmed, 'nova: queue command', sha: sha);
   }
 
-  /// Stops gracefully: the runner flushes saves, uploads a backup, then exits.
+  /// Stops gracefully; the system stop signal is allowed even when user
+  /// console commands are disabled.
   static Future<void> stopServer(GitHubApi api, ServerConfig c) async {
-    await sendCommand(api, c, 'nova:stop');
+    await sendCommand(api, c, 'nova:stop', system: true);
+  }
+
+  static Future<void> requestBackup(GitHubApi api, ServerConfig c) async {
+    await sendCommand(api, c, 'nova:backup', system: true);
   }
 
   /// A stop request makes the runner skip its self-restart; the explicit
@@ -132,7 +157,7 @@ class Provisioner {
   /// the two runs instead of racing them.
   static Future<void> restartServer(GitHubApi api, ServerConfig c, {required bool activeRun}) async {
     if (activeRun) {
-      await sendCommand(api, c, 'nova:stop');
+      await sendCommand(api, c, 'nova:stop', system: true);
     }
     await startServer(api, c);
   }

@@ -4,6 +4,7 @@ import 'package:flutter/material.dart';
 import 'package:flutter/services.dart';
 import 'package:flutter_localizations/flutter_localizations.dart';
 
+import 'core/models.dart';
 import 'core/strings.dart';
 import 'design/theme.dart';
 import 'design/tokens.dart';
@@ -11,6 +12,7 @@ import 'features/auth/auth_screen.dart';
 import 'features/onboarding/onboarding_screen.dart';
 import 'features/onboarding/playit_setup_screen.dart';
 import 'features/servers/create_server_screen.dart';
+import 'features/servers/repository_selection_screen.dart';
 import 'features/shell/app_shell.dart';
 import 'features/splash/splash_screen.dart';
 import 'state/app_state.dart';
@@ -147,14 +149,13 @@ class _RootGateState extends State<RootGate> {
     if (state.loadingServers && state.servers.isEmpty) {
       return const SplashScreen();
     }
-    // The guided Playit step belongs to the first run only: a returning user
-    // who already has servers manages the tunnel from Server settings and is
-    // never blocked by it.
-    if (!state.playitPrepared && !state.playitSkipped && state.servers.isEmpty) {
-      return PlayitSetupScreen(onDone: () => setState(() {}));
-    }
     if (state.servers.isEmpty) {
-      return const CreateServerScreen();
+      final GhRepo? repo = state.pendingRepo;
+      if (repo == null) return const RepositorySelectionScreen();
+      if (!state.pendingRepoPlayitSecretReady && !state.playitSkipped) {
+        return PlayitSetupScreen(repo: repo, onDone: () => setState(() {}));
+      }
+      return CreateServerScreen(initialRepo: repo, lockRepository: true);
     }
     return const AppShell();
   }

@@ -1,46 +1,49 @@
 # NOVA CRAFT
 
-**Flutter (Dart) app** — a complete rewrite of the original Kotlin/Compose build — to create and
-manage Minecraft Java & Bedrock servers using **GitHub Actions** as the runner and **Playit.gg** for
-public connectivity. There is no WebView and no HTML shell: every screen is a native Flutter
-widget rendered with Material 3.
+NOVA CRAFT is a native Flutter/Dart Android app for provisioning and managing Minecraft Java and Bedrock servers on GitHub Actions, with Playit.gg as an optional public tunnel. It retains the existing Flutter/Material 3 architecture; it is not a WebView.
 
-- Package / applicationId: `io.github.abiedadam0077.novacraft` (unchanged)
-- GitHub App: `nova-craft-by-abiedadam0077` (App ID 5353235, Client ID `Iv23linL1Tf6ResSgUqL` — public identifiers only)
-- Auth: GitHub App **Device Flow** (no client secret, no private key, no redirect URI inside the app)
-- Languages: Arabic (default, full RTL) and English; themes: dark, light, system
-- minSdk 26, targetSdk 35, compileSdk 36, JDK 17, Flutter 3.35.7
+- Package: `io.github.abiedadam0077.novacraft`
+- Authentication: GitHub App Device Flow; no client secret or private key is embedded in the app.
+- Languages: Arabic (RTL) and English (LTR); dark, light and system themes.
+- Android: min SDK 26, target SDK 35, compile SDK 36, JDK 17.
+- Flutter CI version: 3.35.7.
 
-## Download the latest APK
+## Current build and verification
 
-Every successful CI run publishes a prerelease with directly downloadable APKs:
+The current implementation is being validated by `.github/workflows/flutter.yml`. That workflow runs static analysis and tests before building an APK, then checks its package/version, verifies its Android signature with `apksigner`, calculates SHA-256, uploads the evidence, publishes a GitHub prerelease, downloads the APK again, and checks the published bytes against the checksum.
 
-- Latest verified build (run `39058403987`, arm64, 24,895,037 bytes):
-  <https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39058403987-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk>
-  - SHA-256: `0d6d97bfefd6d6eb29d8c31a7ae51ac1032c4c8684684793bc9882241ec447b3`
-- Universal build (`NOVA-CRAFT-1.0.0-release-debugsigned.apk`, ~60 MB), `SHA256SUMS.txt`,
-  package info and signature report:
-  <https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39058403987-1>
-- All releases: <https://github.com/abiedadam0077/NOVA-CRAFT/releases>
+No link in this section should be treated as a new verified build until the workflow has completed successfully. See [`docs/REBUILD_REPORT_FINAL.md`](docs/REBUILD_REPORT_FINAL.md) for the current run result, signing status, hash, download link and limitations. [All GitHub releases](https://github.com/abiedadam0077/NOVA-CRAFT/releases).
 
-The repository does not hold the original release keystore, so CI publishes **AOT release builds
-signed with the CI debug key**. They are installable previews, not production-signed releases, and
-an APK signed by a different key cannot update an existing installation in place. When
-`NOVA_KEYSTORE_BASE64` / `NOVA_KEYSTORE_PASSWORD` / `NOVA_KEY_ALIAS` are configured, CI builds and
-publishes a normally signed release instead. No replacement release key is generated automatically.
+The repository has no committed production keystore. If the repository's `NOVA_KEYSTORE_BASE64` and `NOVA_KEYSTORE_PASSWORD` secrets are not configured, CI produces a release-mode APK signed with the CI debug key. Such an APK can be used for testing, but it is not a production signing identity and cannot update an installation signed by another key. CI does not generate or replace a release key.
 
-## Build pipeline
+## First run
 
-CI (`.github/workflows/flutter.yml`) uses JDK 17, Flutter 3.35.7 and Android SDK 36:
+After onboarding and GitHub sign-in, select a repository where the NOVA CRAFT GitHub App has write access, or create a private repository and install the app on it. The repository is selected **before** Playit setup so the agent key can be written directly as the repository's encrypted `PLAYIT_SECRET_KEY` Actions Secret.
 
-1. `flutter pub get`, `flutter analyze`, `flutter test` (unit + widget tests).
-2. `flutter build apk` — release with the configured keystore, otherwise release builds signed with
-   the CI debug key (universal + arm64 split).
-3. Verifies package name, version, signature and SHA-256 of every APK with `aapt` / `apksigner`.
-4. Publishes a `flutter-apk-<run-id>-<attempt>` prerelease, then re-downloads the asset and checks
-   its hash before reporting the direct link.
+Playit is optional. To use it:
 
-Locally:
+1. Create a Playit Agent and create the needed Tunnel manually in the Playit dashboard. NOVA CRAFT never creates a Tunnel.
+2. Enter the Agent `SECRET_KEY`; the app checks it through Playit's official agent endpoint and stores it in GitHub Actions Secrets. The key itself is not displayed in status or logs.
+3. Select a matching Tunnel when there are multiple choices. A sole matching Tunnel may be selected automatically; ambiguous or missing IDs are not guessed.
+4. The runner reads the address actually reported by the Playit agent. The UI only reports a connection after a real server cycle and game-protocol probe. If Playit has not returned an address, enter a manually verified address or continue without public connectivity.
+
+Playit may be skipped during setup and linked later from Network settings. An unlinked or unavailable Tunnel is shown as unknown/missing/error, not as a successful connection.
+
+## Server lifecycle
+
+Each server uses its own GitHub repository and generated `.github/workflows/novacraft-server.yml` workflow. The runner is limited to a five-hour runtime budget inside GitHub Actions' six-hour job limit; it is not a 24/7 hosting service. Automatic continuation dispatches another cycle only when enabled and the server was not explicitly stopped. GitHub Actions quotas, queueing, runner availability, network access, and the repository plan apply.
+
+The workflow validates the relative data path before cache restore and again before runner operations. It reapplies settings from `server.json`, downloads pinned server builds with checksum verification where provided, and waits for a real Java/Bedrock readiness signal before reporting the process as ready. Status and log files are published to the server repository; console commands are size/control-character checked, the internal `nova:` namespace is reserved, and manual commands can be disabled.
+
+## Backups and restore
+
+Backups include the edition's world data and relevant server settings, are created only after Java or Bedrock confirms its save operation, and are ZIP-CRC and SHA-256 checked locally and again after download from GitHub Releases. A verified marker is written only after the published archive has been downloaded and checked. The app lists only non-draft releases for the current server that contain both the expected ZIP and checksum assets; older unmarked backups are identified as needing verification. Restore validates the tag, checksum, archive paths and size limits, and rolls back partially replaced world data on failure.
+
+The configurable retention is a number of backups (2–30), not days. Old releases are considered for pruning only after the new archive has been verified; unverified, incomplete or foreign-server releases are not pruning candidates. The app can open the exact `world-backup.zip` asset for download or queue a safe restore.
+
+## Build and tests
+
+Run locally with Flutter installed:
 
 ```sh
 flutter pub get
@@ -49,60 +52,4 @@ flutter test
 flutter build apk --release
 ```
 
-## Not verified on a physical device
-
-`flutter analyze` and the test suite pass in CI, and the APKs above were built and verified there.
-No physical Android device or authenticated GitHub account was available to this build, so the
-Device Flow sign-in, live repository discovery, starting a real server, console streaming, file
-editing, Modrinth installs, backups/restores and Playit.gg tunnels are **not** exercised end-to-end.
-Bedrock servers are created from Mojang's official Bedrock Dedicated Server download, and
-`.mcaddon` / `.mcpack` files are unpacked and registered in the world pack manifests; that path has
-not been exercised against a live Bedrock server either. GitHub-hosted runners are not a 24/7 host:
-a server stops when its workflow ends.
-
-## Navigation and first run
-
-The app opens on a splash, then a three-step onboarding, then **GitHub Device Flow**, then
-**Playit.gg preparation** (skippable, remembered), then the first-server wizard. The navigation bar does not exist before a real server does, and it has
-exactly five destinations:
-
-| # | Arabic | English | Contents |
-|---|---|---|---|
-| 1 | الرئيسية | Home | server identity, real status, address, Start / Stop / Restart |
-| 2 | الكونسول | Console | real `nova-craft/live.log` tail (polling, never labelled live-streaming), commands, search, follow toggle |
-| 3 | الملفات | Files | only `server/` data — path containment enforced |
-| 4 | المودات | Mods | Modrinth mods (Fabric) and plugins (Paper/Purpur/Spigot), jar upload |
-| 5 | إعدادات السيرفر | Server settings | Minecraft settings + EULA, network/Playit, run cycle, backups, worlds, account, app settings |
-
-## Version and software support
-
-* **Vanilla** — official Mojang manifest (`piston-meta`), including `javaVersion.majorVersion`.
-* **Paper** — `fill.papermc.io/v3` only (the old `api.papermc.io/v2` was disabled on 2026-07-01),
-  stable channel, checksum verified via `sha256`.
-* **Purpur** — `api.purpurmc.org/v2`, latest build, MD5 verified.
-* **Fabric** — `meta.fabricmc.net/v2` with a stable loader + the vanilla server jar.
-* **Forge / NeoForge** — deliberately **not offered**: there is no reliable per-version resolution
-  path, and the app never shows versions it cannot actually download and run.
-
-Java is selected per version: `≤1.16 → 8`, `1.17 → 16`, `1.18–1.20.4 → 17`,
-`1.20.5+/1.21.x → 21`, `26.x → 25`.
-
-## How a server runs
-
-Each server lives in its own GitHub repository containing `nova-craft/server.json`,
-`nova-craft/config.py`, `nova-craft/runner.sh` and `.github/workflows/novacraft-server.yml`.
-A cycle (`timeout-minutes: 330`, inside GitHub's 6h limit):
-
-1. restores the Actions cache and, if present, the newest `backup-<id>-*` Release (checksum checked);
-2. rewrites `server.properties` from `server.json` so app edits always win over the cache;
-3. writes `eula.txt` **only** when the user accepted the EULA, otherwise refuses to start;
-4. downloads the server build and verifies its SHA-256/SHA-1/MD5;
-5. starts the Playit agent with `PLAYIT_SECRET_KEY`, reads the assigned public address from the
-   agent log and probes it over TCP before reporting the tunnel as connected;
-6. waits for a real `Done (Xs)!` / `Server started` line before publishing `ready`;
-7. publishes `nova-craft/status.json` every 30 s and the log tail to `nova-craft/live.log` every
-   ~30 s, and drains `nova-craft/commands/`;
-8. on stop: `save-off` → `save-all flush` → verified `world-backup.zip` Release → `stop`.
-
-Because a workflow is not a 24/7 host, the app states the cycle limit and relies on the next
-dispatch (or auto-restart) instead of pretending the server is always online.
+CI also has a manually dispatchable Android emulator smoke workflow. A CI build, a successful APK signature/hash check, an emulator smoke test, and a live GitHub/Playit/Minecraft server test are separate claims; the final report records exactly which were run. External account credentials and a real Minecraft/Playit setup are required for end-to-end service testing.

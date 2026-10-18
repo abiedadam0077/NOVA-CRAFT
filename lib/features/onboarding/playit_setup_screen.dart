@@ -3,6 +3,8 @@ import 'package:flutter/services.dart';
 import 'package:url_launcher/url_launcher.dart';
 
 import '../../core/config.dart';
+import '../../core/formatters.dart';
+import '../../core/models.dart';
 import '../../core/playit_api.dart';
 import '../../core/strings.dart';
 import '../../design/theme.dart';
@@ -17,15 +19,13 @@ import '../../design/widgets/nav.dart';
 import '../../design/widgets/surfaces.dart';
 import '../../state/app_state.dart';
 
-/// Step two of the first run: connect the Playit.gg agent.
-///
-/// The secret is verified against Playit's real agent API before it is
-/// accepted, so "connected" is never shown for an unverified key. A public
-/// address is displayed only when Playit itself reports one for a tunnel of
-/// the right edition. Nothing here claims 24/7 uptime or a fixed address.
+/// Step three of first run: verify the user's Playit key and store it as a
+/// GitHub Actions Secret in the repository selected in the preceding step.
+/// Tunnel creation stays in the Playit dashboard and is never automated here.
 class PlayitSetupScreen extends StatefulWidget {
-  const PlayitSetupScreen({super.key, required this.onDone});
+  const PlayitSetupScreen({super.key, required this.repo, required this.onDone});
 
+  final GhRepo repo;
   final VoidCallback onDone;
 
   @override
@@ -38,31 +38,53 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
   bool _obscure = true;
   bool _saving = false;
   bool _checking = false;
+  bool _skipping = false;
+  bool _loadingStored = true;
+  String? _storedSecret;
   String? _error;
   String? _note;
   PlayitAgentState? _agent;
 
   @override
+  void initState() {
+    super.initState();
+    WidgetsBinding.instance.addPostFrameCallback((_) async {
+      final String? secret = await AppScope.read(context).store.playitSecret();
+      if (!mounted) return;
+      setState(() {
+        _storedSecret = secret;
+        _loadingStored = false;
+      });
+    });
+  }
+
+  @override
   void dispose() {
     _secret.dispose();
+    _playit.dispose();
     super.dispose();
   }
 
-  Future<void> _openDashboard() async {
+  Future<void> _openAgentSetup() async {
     await launchUrl(Uri.parse(AppConfig.playitAgentUrl), mode: LaunchMode.externalApplication);
+  }
+
+  Future<void> _openTunnels() async {
+    await launchUrl(Uri.parse(AppConfig.playitDashboard), mode: LaunchMode.externalApplication);
   }
 
   String? _validate(String value) {
     final String v = value.trim();
     if (v.isEmpty) return L10n.t('playitSecretInvalid');
     if (v.contains(RegExp(r'\s'))) return L10n.t('playitSecretInvalid');
-    if (v.length < 20) return L10n.t('playitSecretInvalid');
     return null;
   }
 
   /// Asks Playit whether this key is real. The key is never logged.
+  String get _candidateSecret => _secret.text.trim().isNotEmpty ? _secret.text.trim() : (_storedSecret ?? '');
+
   Future<void> _verify() async {
-    final String? problem = _validate(_secret.text);
+    final String? problem = _validate(_candidateSecret);
     if (problem != null) {
       setState(() => _error = problem);
       return;
@@ -74,7 +96,7 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
       _note = null;
     });
     try {
-      final PlayitAgentState state = await _playit.agentState(_secret.text);
+      final PlayitAgentState state = await _playit.agentState(_candidateSecret);
       if (!mounted) return;
       if (!state.ok) {
         setState(() {
@@ -102,23 +124,32 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
     if (value.contains('timeout') || value.contains('socket') || value.contains('failed host lookup')) {
       return L10n.t('playitNetworkError');
     }
-    return raw.isEmpty ? L10n.t('errorGeneric') : raw;
+    return L10n.t('playitNetworkError');
   }
 
   Future<void> _save() async {
+    if (_agent == null || !_agent!.ok) return;
     setState(() {
       _saving = true;
       _error = null;
     });
     try {
-      await AppScope.read(context).savePlayitSecret(_secret.text.trim());
+      final AppState state = AppScope.read(context);
+      final String? provided = _secret.text.trim().isEmpty ? null : _secret.text.trim();
+      final bool saved = await state.installPlayitSecretForRepo(
+        widget.repo.owner,
+        widget.repo.name,
+        provided: provided,
+      );
+      if (!saved) throw StateError('missing-playit-secret');
+      state.markPendingRepoPlayitReady();
       if (!mounted) return;
       HapticFeedback.mediumImpact();
       _secret.clear();
       widget.onDone();
     } catch (error) {
       if (!mounted) return;
-      setState(() => _error = L10n.t('playitSecretInvalid'));
+      setState(() => _error = Fmt.error(error));
     } finally {
       if (mounted) setState(() => _saving = false);
     }
@@ -128,21 +159,32 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
     final bool ok = await showNovaConfirm(
       context,
       title: L10n.t('playitSkipForNow'),
-      body: L10n.t('playitVerifyNote'),
+      body: L10n.t('playitSkipBody'),
       confirmLabel: L10n.t('playitSkipForNow'),
-      danger: true,
+      icon: Icons.skip_next_rounded,
     );
     if (!ok || !mounted) return;
-    await AppScope.read(context).skipPlayitForNow();
-    widget.onDone();
+    setState(() => _skipping = true);
+    try {
+      final AppState state = AppScope.read(context);
+      await state.skipPlayitForNow();
+      state.markPendingRepoPlayitReady();
+      if (!mounted) return;
+      widget.onDone();
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _error = Fmt.error(error));
+    } finally {
+      if (mounted) setState(() => _skipping = false);
+    }
   }
 
   @override
   Widget build(BuildContext context) {
     final p = context.nova;
     final PlayitAgentState? agent = _agent;
-    final PlayitTunnel? javaTunnel = agent?.tunnelFor(bedrock: false);
-    final PlayitTunnel? bedrockTunnel = agent?.tunnelFor(bedrock: true);
+    final List<PlayitTunnel> javaTunnels = agent?.tunnelsFor(bedrock: false) ?? <PlayitTunnel>[];
+    final List<PlayitTunnel> bedrockTunnels = agent?.tunnelsFor(bedrock: true) ?? <PlayitTunnel>[];
     final bool verified = agent != null && agent.ok;
     return Scaffold(
       backgroundColor: p.bg,
@@ -180,14 +222,41 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
                       ),
                     ),
                     const SizedBox(height: 14),
-                    NovaButton(
-                      label: L10n.t('openPlayitDashboard'),
-                      icon: Icons.open_in_new_rounded,
-                      variant: NovaButtonVariant.secondary,
-                      height: 48,
-                      size: NovaButtonSize.compact,
-                      onPressed: _openDashboard,
+                    InfoBanner(
+                      title: L10n.t('repository'),
+                      body: widget.repo.fullName,
+                      icon: Icons.lock_outline_rounded,
+                      color: p.primaryBright,
+                      dense: true,
                     ),
+                    const SizedBox(height: 10),
+                    Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: NovaButton(
+                            label: L10n.t('openPlayitAgent'),
+                            icon: Icons.open_in_new_rounded,
+                            variant: NovaButtonVariant.secondary,
+                            size: NovaButtonSize.compact,
+                            onPressed: _openAgentSetup,
+                          ),
+                        ),
+                        const SizedBox(width: 8),
+                        Expanded(
+                          child: NovaButton(
+                            label: L10n.t('openPlayitTunnels'),
+                            icon: Icons.hub_rounded,
+                            variant: NovaButtonVariant.secondary,
+                            size: NovaButtonSize.compact,
+                            onPressed: _openTunnels,
+                          ),
+                        ),
+                      ],
+                    ),
+                    if (_loadingStored) ...<Widget>[
+                      const SizedBox(height: 12),
+                      const LinearProgressIndicator(minHeight: 2),
+                    ],
                     const SizedBox(height: 20),
                     NovaField(
                       label: L10n.t('playitKeyLabel'),
@@ -195,7 +264,9 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
                       controller: _secret,
                       obscure: _obscure,
                       prefixIcon: Icons.key_rounded,
-                      helper: L10n.t('playitKeyBody'),
+                      helper: _storedSecret != null && _secret.text.isEmpty
+                          ? L10n.t('playitStoredUse')
+                          : L10n.t('playitKeyBody'),
                       errorText: _error,
                       onChanged: (_) {
                         if (_error != null || _agent != null) {
@@ -218,7 +289,7 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
                         label: L10n.t('playitVerifyKey'),
                         icon: Icons.shield_outlined,
                         loading: _checking,
-                        onPressed: _checking ? null : _verify,
+                        onPressed: _checking || _loadingStored ? null : _verify,
                       ),
                       const SizedBox(height: 10),
                       InfoBanner(
@@ -230,8 +301,8 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
                     ] else ...<Widget>[
                       _AgentCard(
                         agent: agent,
-                        javaTunnel: javaTunnel,
-                        bedrockTunnel: bedrockTunnel,
+                        javaTunnels: javaTunnels,
+                        bedrockTunnels: bedrockTunnels,
                         note: _note,
                       ),
                       const SizedBox(height: 14),
@@ -259,15 +330,18 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
                         color: p.violet,
                         dense: true,
                       ),
+                    ] else ...<Widget>[
+                      const SizedBox(height: 8),
+                      NovaButton(
+                        label: L10n.t('playitSkipForNow'),
+                        icon: Icons.skip_next_rounded,
+                        size: NovaButtonSize.compact,
+                        variant: NovaButtonVariant.ghost,
+                        loading: _skipping,
+                        onPressed: _skipping || _loadingStored || _checking ? null : _skip,
+                      ),
                     ],
                     const SizedBox(height: 14),
-                    Center(
-                      child: TextButton(
-                        onPressed: _saving ? null : _skip,
-                        style: TextButton.styleFrom(foregroundColor: p.textDim),
-                        child: Text(L10n.t('playitSkipForNow'), style: NovaTextStyles.small(p.textDim)),
-                      ),
-                    ),
                   ],
                 ),
               ),
@@ -284,15 +358,20 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
 class _AgentCard extends StatelessWidget {
   const _AgentCard({
     required this.agent,
-    required this.javaTunnel,
-    required this.bedrockTunnel,
+    required this.javaTunnels,
+    required this.bedrockTunnels,
     this.note,
   });
 
   final PlayitAgentState agent;
-  final PlayitTunnel? javaTunnel;
-  final PlayitTunnel? bedrockTunnel;
+  final List<PlayitTunnel> javaTunnels;
+  final List<PlayitTunnel> bedrockTunnels;
   final String? note;
+
+  String _tunnelLabel(String base, PlayitTunnel tunnel) {
+    final String identity = tunnel.name.isNotEmpty ? tunnel.name : tunnel.id;
+    return identity.isEmpty ? base : '$base · $identity';
+  }
 
   @override
   Widget build(BuildContext context) {
@@ -321,15 +400,25 @@ class _AgentCard extends StatelessWidget {
             InfoRow(label: L10n.t('playitAgentId'), value: agent.agentId, monospace: true),
           ],
           const SizedBox(height: 10),
-          if (javaTunnel != null)
-            _TunnelRow(label: L10n.t('playitJavaTunnel'), tunnel: javaTunnel!, color: p.primaryBright)
+          if (javaTunnels.isEmpty)
+            _MissingRow(label: L10n.t('playitJavaTunnel'))
           else
-            _MissingRow(label: L10n.t('playitJavaTunnel')),
+            for (final PlayitTunnel tunnel in javaTunnels)
+              _TunnelRow(
+                label: javaTunnels.length == 1 ? L10n.t('playitJavaTunnel') : _tunnelLabel(L10n.t('playitJavaTunnel'), tunnel),
+                tunnel: tunnel,
+                color: p.primaryBright,
+              ),
           const SizedBox(height: 8),
-          if (bedrockTunnel != null)
-            _TunnelRow(label: L10n.t('playitBedrockTunnel'), tunnel: bedrockTunnel!, color: p.violet)
+          if (bedrockTunnels.isEmpty)
+            _MissingRow(label: L10n.t('playitBedrockTunnel'))
           else
-            _MissingRow(label: L10n.t('playitBedrockTunnel')),
+            for (final PlayitTunnel tunnel in bedrockTunnels)
+              _TunnelRow(
+                label: bedrockTunnels.length == 1 ? L10n.t('playitBedrockTunnel') : _tunnelLabel(L10n.t('playitBedrockTunnel'), tunnel),
+                tunnel: tunnel,
+                color: p.violet,
+              ),
           if (note != null) ...<Widget>[
             const SizedBox(height: 10),
             Text(note!, style: NovaTextStyles.small(p.textMuted)),

@@ -75,6 +75,8 @@ class _SettingsBodyState extends State<_SettingsBody> {
   late bool _onlineMode;
   late bool _eula;
   late bool _autoRestart;
+  late bool _allowCommands;
+  late int _backupRetention;
   late TextEditingController _motd;
   bool _saving = false;
 
@@ -99,6 +101,8 @@ class _SettingsBodyState extends State<_SettingsBody> {
     _onlineMode = c.onlineMode;
     _eula = c.eulaAccepted;
     _autoRestart = c.autoRestart;
+    _allowCommands = c.allowCommands;
+    _backupRetention = c.backupRetention;
     _motd = TextEditingController(text: c.motd);
   }
 
@@ -118,6 +122,8 @@ class _SettingsBodyState extends State<_SettingsBody> {
         _onlineMode != c.onlineMode ||
         _eula != c.eulaAccepted ||
         _autoRestart != c.autoRestart ||
+        _allowCommands != c.allowCommands ||
+        _backupRetention != c.backupRetention ||
         _motd.text.trim() != c.motd;
   }
 
@@ -135,6 +141,8 @@ class _SettingsBodyState extends State<_SettingsBody> {
       onlineMode: _onlineMode,
       eulaAccepted: _eula,
       autoRestart: _autoRestart,
+      allowCommands: _allowCommands,
+      backupRetention: _backupRetention,
       motd: _motd.text.trim().isEmpty ? 'A NOVA CRAFT Server' : _motd.text.trim(),
     );
     try {
@@ -340,7 +348,12 @@ class _SettingsBodyState extends State<_SettingsBody> {
                 variant: NovaButtonVariant.secondary,
                 height: 46,
                 size: NovaButtonSize.compact,
-                onPressed: () => _openPage(NetworkView(config: server, reportedAddress: monitor.address, runtime: monitor.runtime)),
+                onPressed: () => _openPage(NetworkView(
+                  config: server,
+                  reportedAddress: monitor.address,
+                  runtime: monitor.runtime,
+                  activeRun: monitor.runActive,
+                )),
               ),
             ],
           ),
@@ -361,6 +374,28 @@ class _SettingsBodyState extends State<_SettingsBody> {
                 icon: Icons.autorenew_rounded,
                 onChanged: (bool v) => setState(() => _autoRestart = v),
               ),
+              NovaSwitchTile(
+                title: L10n.t('allowCommands'),
+                subtitle: L10n.t('allowCommandsBody'),
+                value: _allowCommands,
+                icon: Icons.terminal_rounded,
+                onChanged: (bool v) => setState(() => _allowCommands = v),
+              ),
+              const SizedBox(height: 8),
+              NovaSliderTile(
+                label: L10n.t('backupRetention'),
+                value: _backupRetention.toDouble(),
+                min: 2,
+                max: 30,
+                divisions: 28,
+                suffix: '',
+                icon: Icons.inventory_2_outlined,
+                onChanged: (double v) => setState(() => _backupRetention = v.round()),
+              ),
+              Text(
+                L10n.f('backupRetentionBody', <String, String>{'count': '$_backupRetention'}),
+                style: NovaTextStyles.caption(p.textDim),
+              ),
               const SizedBox(height: 8),
               InfoBanner(body: L10n.t('runnerLimitNote'), icon: Icons.schedule_rounded, color: p.warning, dense: true),
             ],
@@ -374,7 +409,7 @@ class _SettingsBodyState extends State<_SettingsBody> {
           child: Column(
             children: <Widget>[
               _LinkRow(icon: Icons.insights_rounded, label: L10n.t('details'), onTap: () => _openPage(ServerDetailScreen(config: server))),
-              _LinkRow(icon: Icons.backup_outlined, label: L10n.t('settingsBackups'), onTap: () => _openPage(BackupsView(config: server))),
+              _LinkRow(icon: Icons.backup_outlined, label: L10n.t('settingsBackups'), onTap: () => _openPage(BackupsView(config: server, activeRun: monitor.runActive))),
               _LinkRow(icon: Icons.public_rounded, label: L10n.t('settingsWorlds'), onTap: () => _openPage(WorldsView(config: server))),
               _LinkRow(icon: Icons.palette_outlined, label: L10n.t('navSettings'), onTap: () => _openPage(const SettingsScreen(active: true))),
               _LinkRow(icon: Icons.person_outline_rounded, label: L10n.t('settingsAccount'), onTap: () => _openPage(const AccountScreen())),

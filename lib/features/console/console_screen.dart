@@ -111,6 +111,11 @@ class _ConsoleViewState extends State<ConsoleView> {
   Future<void> _send() async {
     final String text = _command.text.trim();
     if (text.isEmpty || _sending) return;
+    if (!widget.config.allowCommands) {
+      showNovaToast(context, L10n.t('commandsDisabled'), kind: ToastKind.warning);
+      return;
+    }
+    bool confirmedDangerous = false;
     if (Validation.isDangerousCommand(text)) {
       final bool ok = await showNovaConfirm(
         context,
@@ -121,11 +126,12 @@ class _ConsoleViewState extends State<ConsoleView> {
         icon: Icons.warning_amber_rounded,
       );
       if (!ok || !mounted) return;
+      confirmedDangerous = true;
     }
     setState(() => _sending = true);
     try {
       final AppState state = AppScope.read(context);
-      await Provisioner.sendCommand(state.api, widget.config, text);
+      await Provisioner.sendCommand(state.api, widget.config, text, confirmedDangerous: confirmedDangerous);
       if (!mounted) return;
       _command.clear();
       HapticFeedback.selectionClick();
@@ -295,7 +301,9 @@ class _ConsoleViewState extends State<ConsoleView> {
             hint: L10n.t('consoleCommandHint'),
             prefixIcon: Icons.chevron_right_rounded,
             monospace: true,
-            onSubmitted: (_) => _send(),
+            enabled: widget.config.allowCommands,
+            helper: widget.config.allowCommands ? null : L10n.t('commandsDisabled'),
+            onSubmitted: widget.config.allowCommands ? (_) => _send() : null,
           ),
         ),
         const SizedBox(width: 8),
@@ -307,7 +315,7 @@ class _ConsoleViewState extends State<ConsoleView> {
             size: 52,
             iconSize: 21,
             filled: true,
-            onTap: _sending ? null : _send,
+            onTap: _sending || !widget.config.allowCommands ? null : _send,
             tooltip: L10n.t('consoleSend'),
           ),
         ),

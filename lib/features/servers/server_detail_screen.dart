@@ -6,6 +6,7 @@ import '../../core/formatters.dart';
 import '../../core/models.dart';
 import '../../core/provisioner.dart';
 import '../../core/strings.dart';
+import '../../core/validation.dart';
 import '../../design/theme.dart';
 import '../../design/tokens.dart';
 import '../../design/widgets/background.dart';
@@ -132,7 +133,7 @@ class _ServerDetailScreenState extends State<ServerDetailScreen> {
       case 4:
         return Padding(
           padding: const EdgeInsets.fromLTRB(NovaSpace.page, 8, NovaSpace.page, 0),
-          child: BackupsView(config: widget.config),
+          child: BackupsView(config: widget.config, activeRun: monitor.runActive),
         );
       case 5:
         return Padding(
@@ -142,7 +143,12 @@ class _ServerDetailScreenState extends State<ServerDetailScreen> {
       case 6:
         return Padding(
           padding: const EdgeInsets.fromLTRB(NovaSpace.page, 8, NovaSpace.page, 0),
-          child: NetworkView(config: widget.config),
+          child: NetworkView(
+            config: widget.config,
+            reportedAddress: monitor.address,
+            runtime: monitor.runtime,
+            activeRun: monitor.runActive,
+          ),
         );
       case 7:
         return _ServerSettingsTab(config: widget.config);
@@ -550,6 +556,7 @@ class _ServerSettingsTabState extends State<_ServerSettingsTab> {
   bool _onlineMode = true;
   bool _allowCommands = true;
   bool _autoRestart = true;
+  int _backupRetention = 10;
   bool _saving = false;
   String? _error;
 
@@ -571,6 +578,7 @@ class _ServerSettingsTabState extends State<_ServerSettingsTab> {
     _onlineMode = c.onlineMode;
     _allowCommands = c.allowCommands;
     _autoRestart = c.autoRestart;
+    _backupRetention = c.backupRetention;
   }
 
   @override
@@ -589,12 +597,17 @@ class _ServerSettingsTabState extends State<_ServerSettingsTab> {
       _error = null;
     });
     try {
+      final String address = _address.text.trim();
+      if (address.isNotEmpty && !Validation.parseHostPort(address, widget.config.localPort).isValid) {
+        setState(() => _error = L10n.t('addressInvalid'));
+        return;
+      }
       final AppState state = AppScope.read(context);
       final ServerConfig next = widget.config.copyWith(
         name: _name.text.trim().isEmpty ? widget.config.name : _name.text.trim(),
         motd: _motd.text.trim(),
         seed: _seed.text.trim(),
-        playitAddress: _address.text.trim(),
+        playitAddress: address,
         gamemode: _gamemode,
         difficulty: _difficulty,
         maxPlayers: _players,
@@ -606,6 +619,7 @@ class _ServerSettingsTabState extends State<_ServerSettingsTab> {
         onlineMode: _onlineMode,
         allowCommands: _allowCommands,
         autoRestart: _autoRestart,
+        backupRetention: _backupRetention,
       );
       await Provisioner.updateConfig(state.api, next);
       state.upsertServer(next);
@@ -632,7 +646,12 @@ class _ServerSettingsTabState extends State<_ServerSettingsTab> {
     if (!ok || !mounted) return;
     try {
       final AppState state = AppScope.read(context);
-      await Provisioner.sendCommand(state.api, widget.config, '$command $name');
+      await Provisioner.sendCommand(
+        state.api,
+        widget.config,
+        '$command $name',
+        confirmedDangerous: true,
+      );
       if (!mounted) return;
       _player.clear();
       showNovaToast(context, L10n.t('commandQueued'), kind: ToastKind.success);
@@ -744,6 +763,16 @@ class _ServerSettingsTabState extends State<_ServerSettingsTab> {
                 NovaSwitchTile(title: L10n.t('onlineMode'), subtitle: L10n.t('onlineModeHint'), value: _onlineMode, onChanged: (bool v) => setState(() => _onlineMode = v), icon: Icons.public_rounded, padding: const EdgeInsets.symmetric(vertical: 2)),
               NovaSwitchTile(title: L10n.t('allowCommands'), value: _allowCommands, onChanged: (bool v) => setState(() => _allowCommands = v), icon: Icons.terminal_rounded, padding: const EdgeInsets.symmetric(vertical: 2)),
               NovaSwitchTile(title: L10n.t('autoRestart'), subtitle: L10n.t('githubRunnersNote'), value: _autoRestart, onChanged: (bool v) => setState(() => _autoRestart = v), icon: Icons.sync_rounded, padding: const EdgeInsets.symmetric(vertical: 2)),
+              NovaSliderTile(
+                label: L10n.t('backupRetention'),
+                value: _backupRetention.toDouble(),
+                min: 2,
+                max: 30,
+                divisions: 28,
+                suffix: '',
+                icon: Icons.history_rounded,
+                onChanged: (double value) => setState(() => _backupRetention = value.round()),
+              ),
             ],
           ),
         ),

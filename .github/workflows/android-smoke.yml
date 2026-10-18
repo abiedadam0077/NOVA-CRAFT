@@ -6,16 +6,11 @@ name: Android launch smoke test
 # can be audited from outside the runner.
 
 on:
-  push:
-    paths:
-      - ".github/workflows/android-smoke.yml"
-      - "smoke-trigger.txt"
   workflow_dispatch:
     inputs:
       tag:
         description: Release tag that contains the APK to test
         required: true
-        default: flutter-apk-39058403987-1
       apk_glob:
         description: Glob used to pick one APK from the release
         required: true
@@ -26,7 +21,7 @@ permissions:
 
 env:
   PACKAGE: io.github.abiedadam0077.novacraft
-  TAG: ${{ inputs.tag || 'flutter-apk-39058403987-1' }}
+  TAG: ${{ inputs.tag }}
   APK_GLOB: ${{ inputs.apk_glob || '*release-debugsigned.apk' }}
 
 jobs:

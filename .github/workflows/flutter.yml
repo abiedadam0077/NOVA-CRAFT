@@ -2,7 +2,7 @@ name: Flutter Build & Delivery
 
 on:
   push:
-    branches: ["arena/9ee1fafe-nova-craft", "arena/5a6ddfcf-nova-craft", "main"]
+    branches: ["arena/9027d464-nova-craft", "main"]
     paths-ignore: ["README.md", "docs/**"]
   workflow_dispatch:
 

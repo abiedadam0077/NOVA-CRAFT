@@ -13,10 +13,11 @@ import '../../design/widgets/surfaces.dart';
 import '../../state/app_state.dart';
 
 class BackupsView extends StatefulWidget {
-  const BackupsView({super.key, required this.config, this.active = true});
+  const BackupsView({super.key, required this.config, this.active = true, this.activeRun = false});
 
   final ServerConfig config;
   final bool active;
+  final bool activeRun;
 
   @override
   State<BackupsView> createState() => _BackupsViewState();
@@ -51,9 +52,7 @@ class _BackupsViewState extends State<BackupsView> {
       final List<ReleaseInfo> releases = await state.api.listReleases(widget.config.repoOwner, widget.config.repoName);
       if (!mounted) return;
       setState(() {
-        _backups = releases
-            .where((ReleaseInfo r) => r.tag.startsWith('backup-${widget.config.id}-') || r.tag.startsWith('backup-'))
-            .toList();
+        _backups = releases.where((ReleaseInfo release) => release.isBackupFor(widget.config.id)).toList();
       });
     } catch (error) {
       if (!mounted) return;
@@ -67,9 +66,13 @@ class _BackupsViewState extends State<BackupsView> {
     setState(() => _creating = true);
     try {
       final AppState state = AppScope.read(context);
-      await Provisioner.snapshot(state.api, widget.config);
+      if (widget.activeRun) {
+        await Provisioner.requestBackup(state.api, widget.config);
+      } else {
+        await Provisioner.snapshot(state.api, widget.config);
+      }
       if (!mounted) return;
-      showNovaToast(context, L10n.t('backupRestoreQueued'), kind: ToastKind.success);
+      showNovaToast(context, L10n.t(widget.activeRun ? 'backupRequestQueued' : 'backupSnapshotQueued'), kind: ToastKind.success);
       await Future<void>.delayed(const Duration(seconds: 3));
       if (!mounted) return;
       await _load();
@@ -131,7 +134,7 @@ class _BackupsViewState extends State<BackupsView> {
   }
 
   Future<void> _download(ReleaseInfo release) async {
-    final ReleaseAsset? asset = release.assets.isEmpty ? null : release.assets.first;
+    final ReleaseAsset? asset = release.backupArchive;
     if (asset?.downloadUrl == null) {
       showNovaToast(context, L10n.t('errorGeneric'), kind: ToastKind.error);
       return;
@@ -204,7 +207,7 @@ class _BackupsViewState extends State<BackupsView> {
           else
             ..._backups.map((ReleaseInfo release) {
               final bool busy = _busyTag == release.tag;
-              final ReleaseAsset? asset = release.assets.isEmpty ? null : release.assets.first;
+              final ReleaseAsset? asset = release.backupArchive;
               return Container(
                 margin: const EdgeInsets.only(bottom: 10),
                 padding: const EdgeInsets.all(14),
@@ -258,10 +261,10 @@ class _BackupsViewState extends State<BackupsView> {
                           ),
                         ),
                         Pill(
-                          label: L10n.t('backupReady'),
-                          tone: PillTone.success,
+                          label: L10n.t(release.isVerifiedBackup ? 'backupReady' : 'backupNeedsVerification'),
+                          tone: release.isVerifiedBackup ? PillTone.success : PillTone.warning,
                           dense: true,
-                          icon: Icons.check_rounded,
+                          icon: release.isVerifiedBackup ? Icons.check_rounded : Icons.shield_outlined,
                         ),
                       ],
                     ),

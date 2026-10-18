@@ -18,6 +18,8 @@ void main() {
       'bedrock-unzip',
       'server-crashed',
       'backup-failed',
+      'backup-restore-failed',
+      'invalid-restore-tag',
     ]) {
       test('reason "$reason" is published with a reason', () {
         expect(script.contains('publish_cycle_end failure "$reason"'), isTrue);
@@ -37,9 +39,9 @@ void main() {
       expect(script.contains(r'if [ ! -f "$STOP_FLAG" ] && [ "$AUTORESTART" = "true" ]'), isTrue);
     });
 
-    test('a cycle time limit is shorter than the job timeout', () {
-      expect(script.contains('MAXSEC=17100'), isTrue); // 4h45m of running
-      expect(workflow.contains('timeout-minutes: 330'), isTrue); // 5h30m job
+    test('a five-hour runtime budget stays within the six-hour job limit', () {
+      expect(script.contains('MAXSEC=18000'), isTrue);
+      expect(workflow.contains('timeout-minutes: 360'), isTrue);
     });
   });
 
@@ -55,8 +57,17 @@ void main() {
       expect(stop, greaterThan(backup));
     });
 
-    test('the archive is verified before it is published', () {
-      expect(script.contains('sha256sum world-backup.zip > world-backup.sha256'), isTrue);
+    test('the archive and remote release are verified before retention pruning', () {
+      final int published = script.indexOf(r'gh release download "$tag"');
+      final int verified = script.indexOf('sha256sum -c world-backup.sha256', published);
+      final int pruned = script.indexOf('  prune_backups\n  return 0', verified);
+      expect(script.contains('archive.testzip()'), isTrue);
+      expect(script.contains(r'gh api "repos/$REPO/releases?per_page=100"'), isTrue);
+      expect(script.contains('NOVA_CRAFT_BACKUP_VERIFIED'), isTrue);
+      expect(script.contains('world-backup.zip", "world-backup.sha256'), isTrue);
+      expect(published, greaterThan(0));
+      expect(verified, greaterThan(published));
+      expect(pruned, greaterThan(verified));
       expect(script.contains('world-backup.sha256'), isTrue);
     });
 
@@ -92,10 +103,13 @@ void main() {
       expect(workflow.contains('if: always()'), isTrue);
     });
 
-    test('restore accepts an explicit tag or the newest backup', () {
+    test('restore accepts only this server’s explicit tag or its newest backup', () {
       expect(script.contains('NOVA_RESTORE_TAG'), isTrue);
+      expect(script.contains('invalid-restore-tag'), isTrue);
       expect(script.contains('startswith("backup-'), isTrue);
-      expect(script.contains(r'"$SID"'), isTrue);
+      expect(script.contains(r'"backup-$SID-"[A-Za-z0-9_-]'), isTrue);
+      expect(script.contains('NOVA_CRAFT_BACKUP_VERIFIED'), isTrue);
+      expect(script.contains('world-backup.sha256'), isTrue);
     });
   });
 
@@ -107,6 +121,12 @@ void main() {
       expect(workflow.indexOf('actions/cache/restore'), lessThan(workflow.indexOf('nova-craft/runner.sh')));
       expect(script.contains('python3 nova-craft/config.py --write-props'), isTrue);
       expect(WorkflowTemplates.configScript.contains('--write-props'), isTrue);
+      expect(WorkflowTemplates.configScript.contains('unsafe server dataPath'), isTrue);
+      expect(WorkflowTemplates.configScript.contains('cannot traverse a symbolic link'), isTrue);
+      expect(WorkflowTemplates.configScript.contains('unsafe server id'), isTrue);
+      expect(WorkflowTemplates.configScript.contains('unsupported server edition'), isTrue);
+      expect(WorkflowTemplates.configScript.contains('server runtime settings are outside safe bounds'), isTrue);
+      expect(script.contains('symbolic link'), isTrue);
     });
 
     test('eula is written only when accepted', () {

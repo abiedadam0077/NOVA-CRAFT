@@ -41,13 +41,24 @@ void main() {
       expect(Validation.fileName('server/mods/test.jar'), 'test.jar');
     });
 
-    test('dangerous console commands are detected', () {
+    test('dangerous console commands are detected by root command', () {
       expect(Validation.isDangerousCommand('stop'), isTrue);
       expect(Validation.isDangerousCommand('/stop'), isTrue);
       expect(Validation.isDangerousCommand('ban SomePlayer'), isTrue);
       expect(Validation.isDangerousCommand('op notchnotch'), isTrue);
+      expect(Validation.isDangerousCommand('whitelist add player'), isTrue);
+      expect(Validation.isDangerousCommand('stopper'), isFalse);
       expect(Validation.isDangerousCommand('say hello'), isFalse);
       expect(Validation.isDangerousCommand('list'), isFalse);
+    });
+
+    test('console commands reject multiline and control characters', () {
+      expect(Validation.isSafeConsoleCommand('say hello'), isTrue);
+      expect(Validation.isSafeConsoleCommand('  say hello  '), isTrue);
+      expect(Validation.isSafeConsoleCommand('say one\nsay two'), isFalse);
+      expect(Validation.isSafeConsoleCommand('say\rhello'), isFalse);
+      expect(Validation.isSafeConsoleCommand(''), isFalse);
+      expect(Validation.isSafeConsoleCommand(List<String>.filled(513, 'x').join()), isFalse);
     });
 
     test('host:port parsing handles schemes and defaults', () {
@@ -67,6 +78,9 @@ void main() {
 
       final HostPort empty = Validation.parseHostPort('   ', 25565);
       expect(empty.isValid, isFalse);
+      expect(Validation.parseHostPort('play.example.gg:abc', 25565).isValid, isFalse);
+      expect(Validation.parseHostPort('[2001:db8::1]:25565', 25565).label, '[2001:db8::1]:25565');
+      expect(Validation.parseHostPort('2001:db8::1', 25565).port, 25565);
     });
 
     test('upload names are sanitised', () {

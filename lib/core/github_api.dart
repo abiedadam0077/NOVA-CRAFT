@@ -97,6 +97,31 @@ class GitHubApi {
     return jsonDecode(utf8.decode(response.bodyBytes));
   }
 
+  /// Fetches every page of a REST collection. GitHub's default is 30 and
+  /// silently returning only the first page hid repositories/releases for
+  /// larger accounts.
+  Future<List<dynamic>> _getAllPages(String url, {String? arrayKey}) async {
+    final Uri base = Uri.parse(url);
+    final List<dynamic> all = <dynamic>[];
+    for (int page = 1; page <= 100; page++) {
+      final Map<String, String> query = <String, String>{
+        ...base.queryParameters,
+        'per_page': '100',
+        'page': '$page',
+      };
+      final dynamic data = _decode(await _send('GET', base.replace(queryParameters: query).toString()));
+      final List<dynamic>? values = data is List
+          ? data
+          : data is Map && data[arrayKey] is List
+              ? data[arrayKey] as List<dynamic>
+              : null;
+      if (values == null) break;
+      all.addAll(values);
+      if (values.length < 100) break;
+    }
+    return all;
+  }
+
   // ------------------------------------------------------------ Device Flow
   Future<DeviceCode> requestDeviceCode(String clientId) async {
     final http.Response response = await _client.post(
@@ -190,47 +215,34 @@ class GitHubApi {
   }
 
   Future<List<GhInstallation>> listInstallations() async {
-    final dynamic data = _decode(await _send('GET', '${AppConfig.githubApi}/user/installations?per_page=100'));
+    final List<dynamic> data = await _getAllPages('${AppConfig.githubApi}/user/installations', arrayKey: 'installations');
     final List<GhInstallation> out = <GhInstallation>[];
-    if (data is Map && data['installations'] is List) {
-      for (final dynamic raw in data['installations'] as List) {
-        if (raw is Map) {
-          final Map<String, dynamic> account = raw['account'] is Map ? Map<String, dynamic>.from(raw['account'] as Map) : <String, dynamic>{};
-          out.add(GhInstallation(
-            (raw['id'] as num?)?.toInt() ?? 0,
-            account['login']?.toString() ?? '',
-            account['type']?.toString() ?? '',
-          ));
-        }
+    for (final dynamic raw in data) {
+      if (raw is Map) {
+        final Map<String, dynamic> account = raw['account'] is Map ? Map<String, dynamic>.from(raw['account'] as Map) : <String, dynamic>{};
+        out.add(GhInstallation(
+          (raw['id'] as num?)?.toInt() ?? 0,
+          account['login']?.toString() ?? '',
+          account['type']?.toString() ?? '',
+        ));
       }
     }
     return out;
   }
 
   Future<List<GhRepo>> listInstallationRepos(int installationId) async {
-    final dynamic data = _decode(
-      await _send('GET', '${AppConfig.githubApi}/user/installations/$installationId/repositories?per_page=100'),
+    final List<dynamic> data = await _getAllPages(
+      '${AppConfig.githubApi}/user/installations/$installationId/repositories',
+      arrayKey: 'repositories',
     );
-    final List<GhRepo> out = <GhRepo>[];
-    if (data is Map && data['repositories'] is List) {
-      for (final dynamic raw in data['repositories'] as List) {
-        if (raw is Map) out.add(GhRepo.fromJson(Map<String, dynamic>.from(raw)));
-      }
-    }
-    return out;
+    return data.whereType<Map>().map((Map raw) => GhRepo.fromJson(Map<String, dynamic>.from(raw))).toList();
   }
 
   Future<List<GhRepo>> listUserRepos() async {
-    final dynamic data = _decode(
-      await _send('GET', '${AppConfig.githubApi}/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator'),
+    final List<dynamic> data = await _getAllPages(
+      '${AppConfig.githubApi}/user/repos?sort=updated&affiliation=owner,collaborator',
     );
-    final List<GhRepo> out = <GhRepo>[];
-    if (data is List) {
-      for (final dynamic raw in data) {
-        if (raw is Map) out.add(GhRepo.fromJson(Map<String, dynamic>.from(raw)));
-      }
-    }
-    return out;
+    return data.whereType<Map>().map((Map raw) => GhRepo.fromJson(Map<String, dynamic>.from(raw))).toList();
   }
 
   Future<GhRepo> createRepo(String name, bool isPrivate, String description) async {
@@ -574,14 +586,8 @@ class GitHubApi {
 
   // --------------------------------------------------------------- releases
   Future<List<ReleaseInfo>> listReleases(String owner, String repo) async {
-    final dynamic data = _decode(await _send('GET', '${AppConfig.githubApi}/repos/$owner/$repo/releases?per_page=50'));
-    final List<ReleaseInfo> out = <ReleaseInfo>[];
-    if (data is List) {
-      for (final dynamic raw in data) {
-        if (raw is Map) out.add(ReleaseInfo.fromJson(Map<String, dynamic>.from(raw)));
-      }
-    }
-    return out;
+    final List<dynamic> data = await _getAllPages('${AppConfig.githubApi}/repos/$owner/$repo/releases');
+    return data.whereType<Map>().map((Map raw) => ReleaseInfo.fromJson(Map<String, dynamic>.from(raw))).toList();
   }
 
   Future<void> deleteRelease(String owner, String repo, int releaseId) async {
@@ -620,6 +626,15 @@ class GitHubApi {
       }
     }
     return out;
+  }
+
+  Future<void> deleteSecret(String owner, String repo, String name) async {
+    final http.Response response = await _send(
+      'DELETE',
+      '${AppConfig.githubApi}/repos/$owner/$repo/actions/secrets/${Uri.encodeComponent(name)}',
+    );
+    if (response.statusCode == 404) return;
+    _decode(response);
   }
 
   /// Encrypts with the repository public key using libsodium's sealed box

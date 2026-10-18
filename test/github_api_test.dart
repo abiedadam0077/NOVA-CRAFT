@@ -1,9 +1,12 @@
 import 'dart:convert';
+import 'dart:typed_data';
+
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:nova_craft/core/github_api.dart';
 import 'package:nova_craft/core/models.dart';
+import 'package:nova_craft/core/provisioner.dart';
 import 'package:pinenacl/x25519.dart';
 
 /// These tests exercise the real request/response contract against a fake
@@ -79,6 +82,30 @@ void main() {
       expect(post.method, 'POST');
       expect(jsonDecode(post.body)['ref'], 'master');
     });
+
+    test('repository listing follows every API page', () async {
+      final List<http.Request> seen = <http.Request>[];
+      Map<String, dynamic> repo(int id) => <String, dynamic>{
+            'id': id,
+            'name': 'repo-$id',
+            'owner': <String, String>{'login': 'owner'},
+            'private': true,
+            'default_branch': 'main',
+            'permissions': <String, bool>{'push': true},
+          };
+      final http.Client client = MockClient((http.Request request) async {
+        seen.add(request);
+        final List<Map<String, dynamic>> page = request.url.queryParameters['page'] == '1'
+            ? List<Map<String, dynamic>>.generate(100, (int index) => repo(index))
+            : <Map<String, dynamic>>[repo(100)];
+        return http.Response(jsonEncode(page), 200);
+      });
+      final GitHubApi api = GitHubApi(client: client);
+      final List<GhRepo> repos = await api.listUserRepos();
+      expect(repos, hasLength(101));
+      expect(seen.map((http.Request r) => r.url.queryParameters['page']), <String?>['1', '2']);
+      expect(seen.every((http.Request r) => r.url.queryParameters['per_page'] == '100'), isTrue);
+    });
   });
 
   group('Repository secrets', () {
@@ -139,6 +166,29 @@ void main() {
       final GitHubApi api = GitHubApi(client: secretClient(seen: seen, listAfterWrite: true));
       await expectLater(
         api.putSecret('owner', 'repo', 'PLAYIT_SECRET_KEY', '   '),
+        throwsA(isA<ApiException>()),
+      );
+      expect(seen, isEmpty);
+    });
+  });
+
+  group('Backup restore safety', () {
+    test('a release from another server is rejected before dispatch', () {
+      final List<http.Request> seen = <http.Request>[];
+      final GitHubApi api = GitHubApi(
+        client: MockClient((http.Request request) async {
+          seen.add(request);
+          return http.Response('{}', 204);
+        }),
+      );
+      const ServerConfig config = ServerConfig(
+        id: 'server-a',
+        name: 'Server A',
+        repoOwner: 'owner',
+        repoName: 'repo',
+      );
+      expect(
+        () => Provisioner.restoreBackup(api, config, 'backup-server-b-20261018T120000000000Z'),
         throwsA(isA<ApiException>()),
       );
       expect(seen, isEmpty);

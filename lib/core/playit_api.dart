@@ -1,7 +1,5 @@
 import 'dart:async';
 import 'dart:convert';
-import 'dart:math';
-
 import 'package:http/http.dart' as http;
 
 import 'config.dart';
@@ -36,7 +34,7 @@ class PlayitTunnel {
       reasonText = (reason['type'] ?? reason['reason'] ?? '').toString();
     }
     return PlayitTunnel(
-      id: o['id']?.toString() ?? '',
+      id: (o['tunnel_id'] ?? o['id'])?.toString() ?? '',
       name: o['name']?.toString() ?? '',
       type: (o['tunnel_type'] ?? o['tunnel_type_display'] ?? '').toString(),
       protocol: o['port_type']?.toString() ?? '',
@@ -64,13 +62,27 @@ class PlayitAgentState {
 
   bool get ok => error.isEmpty;
 
-  /// The tunnel matching the edition we are running.
-  PlayitTunnel? tunnelFor({required bool bedrock}) {
+  /// Matching tunnels for the selected edition. A caller must not silently
+  /// choose one when several tunnels of the same type exist.
+  List<PlayitTunnel> tunnelsFor({required bool bedrock}) {
     final String want = bedrock ? 'minecraft-bedrock' : 'minecraft-java';
-    for (final PlayitTunnel tunnel in tunnels) {
-      if (tunnel.type == want) return tunnel;
+    final Set<String> seenIds = <String>{};
+    return tunnels.where((PlayitTunnel tunnel) {
+      if (tunnel.type != want) return false;
+      if (tunnel.id.isEmpty) return true;
+      return seenIds.add(tunnel.id);
+    }).toList();
+  }
+
+  PlayitTunnel? tunnelFor({required bool bedrock, String? tunnelId}) {
+    final List<PlayitTunnel> matches = tunnelsFor(bedrock: bedrock);
+    if (tunnelId != null && tunnelId.isNotEmpty) {
+      for (final PlayitTunnel tunnel in matches) {
+        if (tunnel.id == tunnelId) return tunnel;
+      }
+      return null;
     }
-    return null;
+    return matches.length == 1 ? matches.single : null;
   }
 }
 
@@ -91,22 +103,16 @@ class PlayitApi {
 
   /// Reads the agent's tunnels. Never throws: returns an error state instead so
   /// the UI can show "unknown" rather than inventing a connection.
-  Future<PlayitAgentState> agentState(String secret, {bool createIfMissing = false, bool bedrock = false}) async {
+  Future<PlayitAgentState> agentState(String secret) async {
     final String key = secret.trim();
     if (key.isEmpty) return const PlayitAgentState.unknown('missing-secret');
     try {
       final Map<String, dynamic> data = await _rundata(key);
       if (data.isEmpty) return const PlayitAgentState.unknown('unexpected-response');
       final String agentId = (data['agent_id'] ?? '').toString();
-      List<PlayitTunnel> tunnels = _tunnels(data);
-      PlayitTunnel? match = _pick(tunnels, bedrock);
-      if (match == null && createIfMissing && agentId.isNotEmpty) {
-        await createTunnel(key, agentId: agentId, bedrock: bedrock, name: 'NOVA CRAFT');
-        await Future<void>.delayed(const Duration(seconds: 6));
-        final Map<String, dynamic> refreshed = await _rundata(key);
-        tunnels = _tunnels(refreshed);
-        match = _pick(tunnels, bedrock);
-      }
+      final List<PlayitTunnel> tunnels = _tunnels(data);
+      // Reading rundata is the only side effect of this operation. Tunnel
+      // creation is always a user action in the Playit dashboard.
       return PlayitAgentState(agentId: agentId, tunnels: tunnels);
     } on _PlayitFailure catch (error) {
       return PlayitAgentState.unknown(error.message);
@@ -126,41 +132,9 @@ class PlayitApi {
     return out;
   }
 
-  PlayitTunnel? _pick(List<PlayitTunnel> tunnels, bool bedrock) {
-    final String want = bedrock ? 'minecraft-bedrock' : 'minecraft-java';
-    for (final PlayitTunnel tunnel in tunnels) {
-      if (tunnel.type == want) return tunnel;
-    }
-    return null;
-  }
-
   Future<Map<String, dynamic>> _rundata(String secret) async {
     final http.Response response = await _post(secret, '/v1/agents/rundata', <String, dynamic>{});
     return _unwrap(response);
-  }
-
-  /// Creates a Minecraft tunnel for the agent. Playit may refuse (verified
-  /// account / plan limits); the failure message is surfaced verbatim.
-  Future<void> createTunnel(String secret, {required String agentId, required bool bedrock, required String name}) async {
-    final String type = bedrock ? 'minecraft-bedrock' : 'minecraft-java';
-    final http.Response response = await _post(secret, '/v1/tunnels/create', <String, dynamic>{
-      'name': name.length > 20 ? name.substring(0, 20) : name,
-      'ports': <String, dynamic>{'type': 'tunnel-type', 'details': type},
-      'origin': <String, dynamic>{
-        'type': 'agent',
-        'data': <String, dynamic>{
-          'agent_id': agentId,
-          'config': <String, dynamic>{
-            'fields': <Map<String, String>>[
-              <String, String>{'name': 'local_ip', 'value': '127.0.0.1'},
-              <String, String>{'name': 'local_port', 'value': bedrock ? '19132' : '25565'},
-            ],
-          },
-        },
-      },
-      'enabled': true,
-    });
-    _unwrap(response);
   }
 
   /// Performs one agent-API POST. The Authorization header is the only place
@@ -198,6 +172,9 @@ class PlayitApi {
       throw _PlayitFailure(message.isEmpty ? status : message);
     }
     if (response.statusCode == 429) throw _PlayitFailure('rate-limited');
+    if (response.statusCode < 200 || response.statusCode >= 300) {
+      throw _PlayitFailure('http-${response.statusCode}');
+    }
     final dynamic data = map['data'];
     if (data is Map) return Map<String, dynamic>.from(data);
     if (map['success'] is Map) return Map<String, dynamic>.from(map['success'] as Map);
@@ -212,56 +189,6 @@ class PlayitApi {
     return text.length > 160 ? '${text.substring(0, 160)}…' : text;
   }
 
-
-  static String generateClaimCode() {
-    final Random random = Random.secure();
-    final List<int> bytes = List<int>.generate(5, (_) => random.nextInt(256));
-    return bytes.map((int b) => b.toRadixString(16).padLeft(2, '0')).join();
-  }
-
-  /// Initiates a guest agent claim setup and returns the URL to open in the browser.
-  Future<String> claimSetup(String code) async {
-    final http.Response response = await _client
-        .post(
-          Uri.parse('$apiBase/claim/setup'),
-          headers: <String, String>{
-            'Content-Type': 'application/json',
-            'User-Agent': AppConfig.userAgent,
-          },
-          body: jsonEncode(<String, dynamic>{
-            'code': code,
-            'agent_type': 'assignable',
-            'version': AppConfig.userAgent,
-          }),
-        )
-        .timeout(_timeout);
-    _unwrap(response);
-    return 'https://playit.gg/claim/$code';
-  }
-
-  /// Exchanges a claimed code for the secret key. Returns null if still waiting.
-  Future<String?> claimExchange(String code) async {
-    final http.Response response = await _client
-        .post(
-          Uri.parse('$apiBase/claim/exchange'),
-          headers: <String, String>{
-            'Content-Type': 'application/json',
-            'User-Agent': AppConfig.userAgent,
-          },
-          body: jsonEncode(<String, dynamic>{'code': code}),
-        )
-        .timeout(_timeout);
-        
-    try {
-      final Map<String, dynamic> result = _unwrap(response);
-      return result['secret_key']?.toString();
-    } on _PlayitFailure catch (error) {
-      if (error.message == 'CodeNotFound' || error.message == 'WaitingForUser' || error.message == 'WaitingForUserVisit') {
-        return null; // Not ready yet
-      }
-      rethrow;
-    }
-  }
 
   void dispose() => _client.close();
 }

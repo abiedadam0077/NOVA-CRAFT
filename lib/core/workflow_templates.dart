@@ -5,8 +5,9 @@ import 'models.dart';
 /// Design notes (these were real bugs in the previous revision):
 /// * `if: env.X` cannot see variables written to `$GITHUB_ENV` by an earlier
 ///   step, so config values are exposed as step *outputs* instead.
-/// * The job timeout (330 min) is shorter than GitHub's 6 h hard limit so the
-///   graceful backup + next-cycle dispatch always have time to run.
+/// * The server gets a five-hour runtime budget inside GitHub's six-hour job
+///   limit, leaving up to an hour for startup, graceful shutdown, backup, and
+///   dispatching the next cycle.
 /// * The world is persisted twice: an Actions cache (fast restore) and a
 ///   release asset (user visible, survives cache eviction). Both are written
 ///   only after `save-off` + `save-all flush`, so region files are not zipped
@@ -45,7 +46,7 @@ permissions:
 jobs:
   server:
     runs-on: ubuntu-24.04
-    timeout-minutes: 330
+    timeout-minutes: 360
     steps:
       - uses: actions/checkout@v4
 
@@ -88,10 +89,42 @@ jobs:
 """Expose nova-craft/server.json values as GitHub step outputs."""
 import json
 import os
+import re
 import sys
 
 with open("nova-craft/server.json", "r", encoding="utf-8") as handle:
     cfg = json.load(handle)
+
+data_path = cfg.get("dataPath") or "server"
+if not isinstance(data_path, str):
+    raise SystemExit("unsafe server dataPath")
+path_parts = data_path.split("/")
+if (data_path.startswith("/") or any(part in ("", ".", "..") or not re.fullmatch(r"[A-Za-z0-9._-]+", part) for part in path_parts)
+        or path_parts[0] in (".git", ".github", "nova-craft")):
+    raise SystemExit("unsafe server dataPath")
+workspace = os.path.realpath(os.getcwd())
+resolved_data_path = os.path.realpath(os.path.join(workspace, data_path))
+if resolved_data_path != os.path.join(workspace, data_path):
+    raise SystemExit("server dataPath cannot traverse a symbolic link")
+
+sid = cfg.get("id")
+if not isinstance(sid, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,80}", sid):
+    raise SystemExit("unsafe server id")
+edition = cfg.get("edition", "JAVA")
+software = cfg.get("software", "VANILLA")
+if not isinstance(edition, str) or edition.upper() not in ("JAVA", "BEDROCK"):
+    raise SystemExit("unsupported server edition")
+if not isinstance(software, str) or not re.fullmatch(r"[A-Za-z0-9_-]{1,32}", software):
+    raise SystemExit("unsafe server software")
+edition = edition.upper()
+software = software.upper()
+try:
+    java_major = int(cfg.get("javaMajor", 21))
+    memory_mb = int(cfg.get("memoryMb", 4096))
+except (TypeError, ValueError):
+    raise SystemExit("invalid server runtime settings")
+if not 8 <= java_major <= 99 or not 512 <= memory_mb <= 65536:
+    raise SystemExit("server runtime settings are outside safe bounds")
 
 
 def truthy(value):
@@ -105,9 +138,9 @@ def write_properties():
     repository could otherwise be overwritten by an older cached copy. Writing
     them again after the restore makes the app's settings authoritative.
     """
-    root = cfg.get("dataPath") or "server"
+    root = data_path
     os.makedirs(root, exist_ok=True)
-    bedrock = (cfg.get("edition") or "JAVA").upper() == "BEDROCK"
+    bedrock = edition == "BEDROCK"
     if bedrock:
         lines = [
             "server-name=%s" % cfg.get("name", "NOVA CRAFT"),
@@ -163,13 +196,15 @@ if "--write-props" in sys.argv:
 
 out = os.environ["GITHUB_OUTPUT"]
 values = {
-    "sid": cfg.get("id", ""),
-    "edition": cfg.get("edition", "JAVA"),
-    "javamajor": str(cfg.get("javaMajor", 21)),
-    "data": cfg.get("dataPath") or "server",
-    "software": cfg.get("software", "VANILLA"),
-    "memory": str(cfg.get("memoryMb", 4096)),
+    "sid": sid,
+    "edition": edition,
+    "javamajor": str(java_major),
+    "data": data_path,
+    "software": software,
+    "memory": str(memory_mb),
     "eula": "true" if cfg.get("eulaAccepted") else "false",
+    "allowcommands": "true" if cfg.get("allowCommands", True) else "false",
+    "backupretention": str(max(2, min(30, int(cfg.get("backupRetention", 10))))),
 }
 with open(out, "a", encoding="utf-8") as handle:
     for key, value in values.items():
@@ -199,9 +234,11 @@ JAVAMAJOR="$(python3 -c 'import json;print(int(json.load(open("nova-craft/server
 DLURL="$(python3 -c 'import json;print(json.load(open("nova-craft/server.json")).get("downloadUrl",""))')"
 DLSHA="$(python3 -c 'import json;print(json.load(open("nova-craft/server.json")).get("downloadSha",""))')"
 EULA="$(python3 -c 'import json;print("true" if json.load(open("nova-craft/server.json")).get("eulaAccepted") else "false")')"
-TUNNEL="$(python3 -c 'import json;print(json.load(open("nova-craft/server.json")).get("playitAddress",""))')"
+PLAYIT_TUNNEL_ID="$(python3 -c 'import json;print(json.load(open("nova-craft/server.json")).get("playitTunnelId",""))')"
 AUTORESTART="$(python3 -c 'import json;print("true" if json.load(open("nova-craft/server.json")).get("autoRestart",True) else "false")')"
-MAXSEC=17100
+ALLOW_COMMANDS="$(python3 -c 'import json;print("true" if json.load(open("nova-craft/server.json")).get("allowCommands",True) else "false")')"
+BACKUP_RETENTION="$(python3 -c 'import json;print(max(2,min(30,int(json.load(open("nova-craft/server.json")).get("backupRetention",10)))))')"
+MAXSEC=18000
 JOB_STARTED=$(date +%s)
 PHASE=unknown
 STATUS_LAST=""
@@ -209,10 +246,34 @@ LIVE_LAST=""
 PLAYIT_PID=""
 SRV_PID=""
 
-mkdir -p "$DATA"
-cd "$DATA" || exit 1
-DATA_ABS="$(pwd)"
-cd ..
+WORKSPACE_ABS="$(pwd -P)"
+if ! python3 - "$DATA" <<'PYDATAPATH'
+import re, sys
+value = sys.argv[1]
+parts = value.split("/")
+if not value or value.startswith("/") or any(part in ("", ".", "..") or not re.fullmatch(r"[A-Za-z0-9._-]+", part) for part in parts) or parts[0] in (".git", ".github", "nova-craft"):
+    sys.exit(1)
+PYDATAPATH
+then
+  echo "[nova] ERROR server dataPath must be a safe relative path"
+  exit 1
+fi
+DATA_CURSOR="$WORKSPACE_ABS"
+IFS='/' read -r -a DATA_PARTS <<< "$DATA"
+for segment in "${DATA_PARTS[@]}"; do
+  DATA_CURSOR="$DATA_CURSOR/$segment"
+  if [ -L "$DATA_CURSOR" ]; then
+    echo "[nova] ERROR server dataPath cannot traverse a symbolic link"
+    exit 1
+  fi
+done
+mkdir -p -- "$DATA" || { echo "[nova] ERROR could not create server dataPath"; exit 1; }
+DATA_ABS="$(cd -- "$DATA" && pwd -P)" || exit 1
+if [ "$DATA_ABS" != "$WORKSPACE_ABS/$DATA" ] || [ "$DATA_ABS" = "$WORKSPACE_ABS" ]; then
+  echo "[nova] ERROR resolved server dataPath is outside the repository checkout"
+  exit 1
+fi
+cd "$WORKSPACE_ABS" || exit 1
 
 log() { echo "[nova] $*"; }
 
@@ -280,6 +341,7 @@ print(json.dumps({
     "tunnelMessage": tmsg,
     "tunnelAddress": os.environ.get("TUNNEL_ADDR", ""),
     "tunnelName": os.environ.get("TUNNEL_NAME", ""),
+    "tunnelId": os.environ.get("TUNNEL_ID", ""),
     "tunnelProtocol": os.environ.get("TUNNEL_PROTO", ""),
     "tunnelOfflineReasons": [x for x in [os.environ.get("TUNNEL_ISSUE", "")] if x],
     "agentId": os.environ.get("AGENT_ID", ""),
@@ -309,13 +371,13 @@ publish_live() {
 
 publish_files() {
   # A structured file manifest plus a bounded snapshot of editable text files.
-  python3 nova-craft/fileops.py manifest "$DATA_ABS" "$DATA_ABS/../nova-craft/files/manifest.json" > /dev/null 2>&1 || true
-  if [ -f nova-craft/files/manifest.json ]; then
-    put_file "nova-craft/files/manifest.json" "$(cat nova-craft/files/manifest.json)" "nova: file manifest" || true
+  python3 "$WORKSPACE_ABS/nova-craft/fileops.py" manifest "$DATA_ABS" "$WORKSPACE_ABS/nova-craft/files/manifest.json" > /dev/null 2>&1 || true
+  if [ -f "$WORKSPACE_ABS/nova-craft/files/manifest.json" ]; then
+    put_file "nova-craft/files/manifest.json" "$(cat "$WORKSPACE_ABS/nova-craft/files/manifest.json")" "nova: file manifest" || true
   fi
-  python3 nova-craft/fileops.py snapshot "$DATA_ABS" "$DATA_ABS/../nova-craft/snapshot.json" > /dev/null 2>&1 || true
-  if [ -f nova-craft/snapshot.json ]; then
-    put_file "nova-craft/snapshot.json" "$(cat nova-craft/snapshot.json)" "nova: config snapshot" || true
+  python3 "$WORKSPACE_ABS/nova-craft/fileops.py" snapshot "$DATA_ABS" "$WORKSPACE_ABS/nova-craft/snapshot.json" > /dev/null 2>&1 || true
+  if [ -f "$WORKSPACE_ABS/nova-craft/snapshot.json" ]; then
+    put_file "nova-craft/snapshot.json" "$(cat "$WORKSPACE_ABS/nova-craft/snapshot.json")" "nova: config snapshot" || true
   fi
 }
 
@@ -408,21 +470,96 @@ PY
 }
 
 probe_tunnel() {
-  # Returns 0 only when the public address really resolves and accepts TCP,
-  # and only while the agent process is alive.
+  # Only report connected after an actual Minecraft protocol ping succeeds.
+  # Java uses Server List Ping over TCP; Bedrock uses RakNet unconnected ping
+  # over UDP. A successful TCP connect alone is not proof for either edition.
   local address="$1"
   [ -n "$address" ] || return 1
   [ -n "$PLAYIT_PID" ] || return 1
   kill -0 "$PLAYIT_PID" 2>/dev/null || return 1
-  python3 - "$address" <<'PY'
-import socket, sys
-address = sys.argv[1].replace("tcp://", "").replace("udp://", "")
-host, _, port = address.rpartition(":")
-if not host:
-    host, port = address, "25565"
+  python3 - "$address" "$EDITION" <<'PY'
+import json, socket, sys, time
+
+address, edition = sys.argv[1:3]
+address = address.replace("tcp://", "").replace("udp://", "")
+host, sep, raw_port = address.rpartition(":")
+if not sep:
+    host, raw_port = address, "19132" if edition == "BEDROCK" else "25565"
+if host.startswith("[") and host.endswith("]"):
+    host = host[1:-1]
 try:
-    with socket.create_connection((host, int(port)), timeout=6):
-        sys.exit(0)
+    port = int(raw_port)
+    if not host or not 1 <= port <= 65535:
+        raise ValueError("invalid host or port")
+except Exception:
+    sys.exit(1)
+
+def varint(value):
+    out = bytearray()
+    while True:
+        part = value & 0x7f
+        value >>= 7
+        if value:
+            out.append(part | 0x80)
+        else:
+            out.append(part)
+            return bytes(out)
+
+def recvn(sock, length):
+    chunks = bytearray()
+    while len(chunks) < length:
+        block = sock.recv(length - len(chunks))
+        if not block:
+            raise OSError("connection closed")
+        chunks.extend(block)
+    return bytes(chunks)
+
+def read_varint(sock):
+    value = 0
+    for shift in range(0, 35, 7):
+        byte = recvn(sock, 1)[0]
+        value |= (byte & 0x7f) << shift
+        if not byte & 0x80:
+            return value
+    raise ValueError("invalid VarInt")
+
+def java_ping():
+    encoded_host = host.encode("utf-8")
+    handshake_payload = b"\x00" + varint(767) + varint(len(encoded_host)) + encoded_host + port.to_bytes(2, "big") + b"\x01"
+    packet = varint(len(handshake_payload)) + handshake_payload + b"\x01\x00"
+    with socket.create_connection((host, port), timeout=6) as sock:
+        sock.settimeout(6)
+        sock.sendall(packet)
+        packet_len = read_varint(sock)
+        if packet_len <= 0 or packet_len > 65536:
+            return False
+        packet_id = read_varint(sock)
+        json_len = read_varint(sock)
+        if packet_id != 0 or json_len <= 0 or json_len > packet_len:
+            return False
+        payload = json.loads(recvn(sock, json_len).decode("utf-8", "replace"))
+        return isinstance(payload, dict) and ("version" in payload or "players" in payload)
+
+def bedrock_ping():
+    magic = bytes((0x00,0xff,0xff,0x00,0xfe,0xfe,0xfe,0xfe,0xfd,0xfd,0xfd,0xfd,0x12,0x34,0x56,0x78))
+    stamp = int(time.time() * 1000).to_bytes(8, "big", signed=False)
+    packet = b"\x01" + stamp + magic + (123456789).to_bytes(8, "big", signed=False)
+    with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as sock:
+        sock.settimeout(6)
+        sock.sendto(packet, (host, port))
+        reply, _ = sock.recvfrom(4096)
+    if len(reply) < 35 or reply[0] != 0x1c or reply[17:33] != magic:
+        return False
+    text_len = int.from_bytes(reply[33:35], "big")
+    if text_len <= 0 or 35 + text_len > len(reply):
+        return False
+    fields = reply[35:35 + text_len].decode("utf-8", "replace").split(";")
+    return len(fields) >= 2 and bool(fields[0])
+
+try:
+    if edition == "BEDROCK":
+        sys.exit(0 if bedrock_ping() else 1)
+    sys.exit(0 if java_ping() else 1)
 except Exception:
     sys.exit(1)
 PY
@@ -446,21 +583,194 @@ fi
 
 mkdir -p nova-craft
 INCOMING=nova-craft/import
-RESTORE_TAG="${NOVA_RESTORE_TAG:-}"
-if [ -z "$RESTORE_TAG" ]; then
-  RESTORE_TAG="$(gh release list --repo "$REPO" --limit 60 --json tagName,createdAt \
-      --jq '[.[] | select(.tagName | startswith("backup-'"$SID"'-"))] | sort_by(.createdAt) | last | .tagName // empty' 2>/dev/null || true)"
-fi
-if [ -n "$RESTORE_TAG" ]; then
-  log "restoring release $RESTORE_TAG"
-  TMPD="$(mktemp -d)"
-  if gh release download "$RESTORE_TAG" --repo "$REPO" --pattern "world-backup.zip" --dir "$TMPD" 2>/dev/null; then
-    if gh release download "$RESTORE_TAG" --repo "$REPO" --pattern "world-backup.sha256" --dir "$TMPD" 2>/dev/null; then
-      (cd "$TMPD" && sha256sum -c world-backup.sha256) || log "WARN backup checksum mismatch"
-    fi
-    unzip -o -q "$TMPD/world-backup.zip" -d "$DATA_ABS" && log "restored $RESTORE_TAG"
+REQUESTED_RESTORE_TAG="${NOVA_RESTORE_TAG:-}"
+RESTORE_TAG=""
+if [ "$ACTION" = "snapshot" ]; then
+  if [ -n "$REQUESTED_RESTORE_TAG" ]; then
+    log "ERROR snapshot actions cannot include a restore tag"
+    publish_cycle_end failure "invalid-restore-tag"
+    exit 1
+  fi
+else
+  if [ -n "$REQUESTED_RESTORE_TAG" ]; then
+    case "$REQUESTED_RESTORE_TAG" in
+      "backup-$SID-"[A-Za-z0-9_-][A-Za-z0-9_-]*) ;;
+      *)
+        log "ERROR the requested backup tag does not belong to this server"
+        publish_cycle_end failure "invalid-restore-tag"
+        exit 1
+        ;;
+    esac
   else
-    log "WARN could not download $RESTORE_TAG; keeping cached data"
+    RELEASE_LIST="/tmp/nova-backup-releases.json"
+    if gh api "repos/$REPO/releases?per_page=100" > "$RELEASE_LIST" 2>/dev/null; then
+      REQUESTED_RESTORE_TAG="$(python3 - "$RELEASE_LIST" "$SID" <<'PYLATEST'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    releases = json.load(handle)
+prefix = "backup-%s-" % sys.argv[2]
+backups = []
+for release in releases:
+    if not isinstance(release, dict) or release.get("draft"):
+        continue
+    if not str(release.get("tag_name", "")).startswith(prefix):
+        continue
+    if "NOVA_CRAFT_BACKUP_VERIFIED" not in str(release.get("body", "")):
+        continue
+    assets = {asset.get("name") for asset in (release.get("assets") or []) if isinstance(asset, dict)}
+    if {"world-backup.zip", "world-backup.sha256"} <= assets:
+        backups.append(release)
+backups.sort(key=lambda release: str(release.get("created_at", "")), reverse=True)
+if backups:
+    print(backups[0].get("tag_name", ""))
+PYLATEST
+      )"
+    else
+      log "WARN could not list verified backups; using the cached world"
+    fi
+  fi
+fi
+
+restore_backup_archive() {
+  python3 - "$1" "$DATA_ABS" "$EDITION" <<'PYRESTORE'
+import os, shutil, stat, sys, zipfile
+archive_path, root, edition = sys.argv[1:]
+world_roots = {"worlds"} if edition == "BEDROCK" else {"world", "world_nether", "world_the_end"}
+shared = ({"server.properties", "allowlist.json", "permissions.json"} if edition == "BEDROCK" else
+          {"server.properties", "whitelist.json", "banned-players.json", "banned-ips.json", "ops.json"})
+stage = os.path.join(root, ".nova-restore-stage")
+if os.path.exists(stage):
+    if os.path.islink(stage):
+        raise SystemExit("restore staging path is a symlink")
+    shutil.rmtree(stage)
+os.makedirs(stage)
+try:
+    with zipfile.ZipFile(archive_path, "r") as archive:
+        infos = archive.infolist()
+        if not infos or len(infos) > 100000:
+            raise ValueError("empty or oversized backup manifest")
+        accepted = []
+        seen = set()
+        expanded_size = 0
+        max_total_size = 8 * 1024 * 1024 * 1024
+        max_file_size = 4 * 1024 * 1024 * 1024
+        for info in infos:
+            name = info.filename.replace("\\", "/")
+            clean_name = name.rstrip("/")
+            if clean_name in seen:
+                raise ValueError("duplicate archive path")
+            seen.add(clean_name)
+            if info.file_size < 0 or info.file_size > max_file_size:
+                raise ValueError("backup file exceeds the restore size limit")
+            expanded_size += info.file_size
+            if expanded_size > max_total_size:
+                raise ValueError("backup exceeds the restore size limit")
+            parts = clean_name.split("/")
+            if name.startswith("/") or not clean_name or any(part in ("", ".", "..") for part in parts):
+                raise ValueError("unsafe archive path")
+            first = parts[0]
+            if first not in world_roots and not (len(parts) == 1 and first in shared):
+                raise ValueError("unexpected path in backup")
+            mode = (info.external_attr >> 16) & 0xffff
+            if stat.S_ISLNK(mode):
+                raise ValueError("symlink in backup")
+            if info.is_dir():
+                continue
+            if mode and not stat.S_ISREG(mode):
+                raise ValueError("non-regular file in backup")
+            accepted.append((info, name))
+        if not accepted:
+            raise ValueError("backup has no files")
+        if archive.testzip() is not None:
+            raise ValueError("backup CRC verification failed")
+        for info, name in accepted:
+            target = os.path.realpath(os.path.join(stage, *name.rstrip("/").split("/")))
+            if os.path.commonpath((os.path.realpath(stage), target)) != os.path.realpath(stage):
+                raise ValueError("archive path escaped staging root")
+            os.makedirs(os.path.dirname(target), exist_ok=True)
+            with archive.open(info, "r") as source, open(target, "wb") as destination:
+                shutil.copyfileobj(source, destination)
+        # Only after the complete archive is checked and staged do we replace
+        # the existing world folders and shared files.
+        world_data_found = False
+        for world_root in world_roots:
+            staged_world = os.path.join(stage, world_root)
+            if os.path.isdir(staged_world):
+                for _, _, files in os.walk(staged_world):
+                    if files:
+                        world_data_found = True
+                        break
+            if world_data_found:
+                break
+        if not world_data_found:
+            raise ValueError("backup contains no world data")
+        previous_root = os.path.join(stage, ".previous")
+        os.makedirs(previous_root)
+        moved_old = []
+        installed_new = []
+        try:
+            for rel in world_roots:
+                target = os.path.join(root, rel)
+                staged = os.path.join(stage, rel)
+                if not os.path.isdir(staged):
+                    continue
+                if os.path.lexists(target):
+                    if os.path.islink(target) or not os.path.isdir(target):
+                        raise ValueError("unsafe existing world path")
+                    previous = os.path.join(previous_root, rel)
+                    os.makedirs(os.path.dirname(previous), exist_ok=True)
+                    os.replace(target, previous)
+                    moved_old.append((target, previous))
+                os.replace(staged, target)
+                installed_new.append(target)
+            for rel in shared:
+                staged = os.path.join(stage, rel)
+                if not os.path.isfile(staged):
+                    continue
+                target = os.path.join(root, rel)
+                if os.path.lexists(target):
+                    if os.path.isdir(target) and not os.path.islink(target):
+                        raise ValueError("unsafe existing shared path")
+                    previous = os.path.join(previous_root, rel)
+                    os.makedirs(os.path.dirname(previous), exist_ok=True)
+                    os.replace(target, previous)
+                    moved_old.append((target, previous))
+                os.replace(staged, target)
+                installed_new.append(target)
+        except Exception:
+            for target in reversed(installed_new):
+                if not os.path.lexists(target):
+                    continue
+                if os.path.isdir(target) and not os.path.islink(target):
+                    shutil.rmtree(target)
+                else:
+                    os.unlink(target)
+            for target, previous in reversed(moved_old):
+                if os.path.lexists(previous):
+                    os.makedirs(os.path.dirname(target), exist_ok=True)
+                    os.replace(previous, target)
+            raise
+finally:
+    if os.path.isdir(stage) and not os.path.islink(stage):
+        shutil.rmtree(stage, ignore_errors=True)
+print("verified backup extracted safely")
+PYRESTORE
+}
+
+if [ -n "$REQUESTED_RESTORE_TAG" ]; then
+  log "checking backup release $REQUESTED_RESTORE_TAG"
+  TMPD="$(mktemp -d)"
+  if gh release download "$REQUESTED_RESTORE_TAG" --repo "$REPO" --pattern "world-backup.zip" --dir "$TMPD" 2>/dev/null \
+      && gh release download "$REQUESTED_RESTORE_TAG" --repo "$REPO" --pattern "world-backup.sha256" --dir "$TMPD" 2>/dev/null \
+      && (cd "$TMPD" && sha256sum -c world-backup.sha256) \
+      && restore_backup_archive "$TMPD/world-backup.zip"; then
+    RESTORE_TAG="$REQUESTED_RESTORE_TAG"
+    log "restored verified backup $RESTORE_TAG"
+  else
+    rm -rf "$TMPD"
+    log "ERROR backup could not be verified/restored; refusing to start from an older cached world"
+    publish_cycle_end failure "backup-restore-failed"
+    exit 1
   fi
   rm -rf "$TMPD"
 fi
@@ -516,30 +826,153 @@ fi
 
 # ---------------------------------------------------------------- snapshot --
 
+prune_backups() {
+  local listing="/tmp/nova-backup-releases.json"
+  local obsolete="/tmp/nova-backup-prune.txt"
+  gh api "repos/$REPO/releases?per_page=100" > "$listing" 2>/dev/null || {
+    log "WARN could not list releases for backup retention"
+    return 0
+  }
+  if ! python3 - "$listing" "$SID" "$BACKUP_RETENTION" > "$obsolete" <<'PYPRUNE'
+import json, sys
+with open(sys.argv[1], encoding="utf-8") as handle:
+    releases = json.load(handle)
+prefix = "backup-%s-" % sys.argv[2]
+keep = max(2, min(30, int(sys.argv[3])))
+verified = []
+for release in releases:
+    if not isinstance(release, dict) or release.get("draft"):
+        continue
+    if not str(release.get("tag_name", "")).startswith(prefix):
+        continue
+    if "NOVA_CRAFT_BACKUP_VERIFIED" not in str(release.get("body", "")):
+        continue
+    assets = {asset.get("name") for asset in (release.get("assets") or []) if isinstance(asset, dict)}
+    if {"world-backup.zip", "world-backup.sha256"} <= assets:
+        verified.append(release)
+verified.sort(key=lambda release: str(release.get("created_at", "")), reverse=True)
+for release in verified[keep:]:
+    print(release.get("tag_name", ""))
+PYPRUNE
+  then
+    log "WARN could not evaluate backup retention safely"
+    return 0
+  fi
+  while IFS= read -r old_tag; do
+    [ -n "$old_tag" ] || continue
+    if gh release delete "$old_tag" --repo "$REPO" --yes --cleanup-tag; then
+      log "pruned old verified backup $old_tag"
+    else
+      log "WARN failed to prune old backup $old_tag"
+    fi
+  done < "$obsolete"
+}
+
 backup_now() {
   local phase_label="$1"
-  local ts tag
-  ts="$(date -u +%Y%m%dT%H%M%SZ)"
+  local ts tag verify_dir work_dir archive_size
+  ts="$(date -u +%Y%m%dT%H%M%S%NZ)"
   tag="backup-$SID-$ts"
+  # Old versions placed the archive in the cached server directory, doubling
+  # cache size on every cycle. Keep archives only in ephemeral runner storage.
   rm -f "$DATA_ABS/world-backup.zip" "$DATA_ABS/world-backup.sha256"
-  if [ "$EDITION" = "JAVA" ]; then
-    (cd "$DATA_ABS" && zip -qr world-backup.zip world world_nether world_the_end \
-        whitelist.json banned-players.json banned-ips.json ops.json server.properties 2>/dev/null || true)
-  else
-    (cd "$DATA_ABS" && zip -qr world-backup.zip worlds server.properties allowlist.json permissions.json 2>/dev/null || true)
-  fi
-  if [ ! -f "$DATA_ABS/world-backup.zip" ]; then
-    log "ERROR nothing to archive yet"
+  work_dir="$(mktemp -d)"
+  if ! python3 - "$DATA_ABS" "$EDITION" "$work_dir/world-backup.zip" "$work_dir/world-backup.sha256" <<'PYBACKUP'
+import hashlib, os, sys, zipfile
+root, edition, archive_path, checksum_path = sys.argv[1:]
+paths = (["worlds", "server.properties", "allowlist.json", "permissions.json"]
+         if edition == "BEDROCK" else
+         ["world", "world_nether", "world_the_end", "server.properties",
+          "whitelist.json", "banned-players.json", "banned-ips.json", "ops.json"])
+world_paths = ["worlds"] if edition == "BEDROCK" else ["world", "world_nether", "world_the_end"]
+world_files = []
+for rel in world_paths:
+    full = os.path.join(root, rel)
+    if os.path.isdir(full) and not os.path.islink(full):
+        for current, dirs, files in os.walk(full, followlinks=False):
+            if any(os.path.islink(os.path.join(current, name)) for name in dirs + files):
+                raise SystemExit("refusing to archive a symlink in world data")
+            world_files.extend(os.path.join(current, name) for name in files)
+if not world_files:
+    raise SystemExit("no world data found; refusing to publish an empty backup")
+count = 0
+with zipfile.ZipFile(archive_path, "w", compression=zipfile.ZIP_DEFLATED, compresslevel=6, allowZip64=True) as archive:
+    for rel in paths:
+        full = os.path.join(root, rel)
+        if not os.path.exists(full):
+            continue
+        if os.path.islink(full):
+            raise SystemExit("refusing to archive a symlink")
+        if os.path.isdir(full):
+            for current, dirs, files in os.walk(full, followlinks=False):
+                dirs.sort(); files.sort()
+                if any(os.path.islink(os.path.join(current, name)) for name in dirs + files):
+                    raise SystemExit("refusing to archive a symlink")
+                for name in files:
+                    source = os.path.join(current, name)
+                    archive.write(source, os.path.relpath(source, root))
+                    count += 1
+        else:
+            archive.write(full, rel)
+            count += 1
+if count == 0:
+    raise SystemExit("backup archive contains no files")
+with zipfile.ZipFile(archive_path, "r") as archive:
+    corrupt = archive.testzip()
+    if corrupt is not None:
+        raise SystemExit("archive verification failed at %s" % corrupt)
+digest = hashlib.sha256()
+with open(archive_path, "rb") as handle:
+    for block in iter(lambda: handle.read(1024 * 1024), b""):
+        digest.update(block)
+with open(checksum_path, "w", encoding="ascii") as handle:
+    handle.write("%s  world-backup.zip\n" % digest.hexdigest())
+print("verified %d files (%d bytes)" % (count, os.path.getsize(archive_path)))
+PYBACKUP
+  then
+    rm -rf "$work_dir"
+    log "ERROR world backup creation or local verification failed"
     return 1
   fi
-  (cd "$DATA_ABS" && sha256sum world-backup.zip > world-backup.sha256)
-  if ! gh release create "$tag" "$DATA_ABS/world-backup.zip" "$DATA_ABS/world-backup.sha256" \
+  archive_size="$(stat -c '%s' "$work_dir/world-backup.zip" 2>/dev/null || echo 0)"
+  if [ "$archive_size" -gt 2147483648 ]; then
+    rm -rf "$work_dir"
+    log "ERROR backup exceeds GitHub's 2 GiB release-asset limit; old backups were preserved"
+    return 1
+  fi
+  if ! gh release create "$tag" "$work_dir/world-backup.zip" "$work_dir/world-backup.sha256" \
         --repo "$REPO" --title "Backup $ts" \
         --notes "NOVA CRAFT $phase_label backup (restored: ${RESTORE_TAG:-cache})"; then
-    log "WARN release create failed, retrying upload"
-    gh release upload "$tag" "$DATA_ABS/world-backup.zip" "$DATA_ABS/world-backup.sha256" --repo "$REPO" --clobber || return 1
+    log "WARN release create failed; attempting upload to an existing tag"
+    if ! gh release upload "$tag" "$work_dir/world-backup.zip" "$work_dir/world-backup.sha256" \
+        --repo "$REPO" --clobber; then
+      rm -rf "$work_dir"
+      return 1
+    fi
   fi
-  log "backup published $tag"
+  verify_dir="$(mktemp -d)"
+  if ! gh release download "$tag" --repo "$REPO" --pattern "world-backup.zip" --pattern "world-backup.sha256" --dir "$verify_dir"; then
+    rm -rf "$work_dir" "$verify_dir"
+    log "ERROR could not download the published backup for verification"
+    return 1
+  fi
+  if ! (cd "$verify_dir" && sha256sum -c world-backup.sha256 && python3 - <<'PYVERIFY'
+import sys, zipfile
+with zipfile.ZipFile("world-backup.zip", "r") as archive:
+    sys.exit(0 if archive.testzip() is None and archive.namelist() else 1)
+PYVERIFY
+  ); then
+    rm -rf "$work_dir" "$verify_dir"
+    log "ERROR published backup failed checksum or archive verification"
+    return 1
+  fi
+  if ! gh release edit "$tag" --repo "$REPO" \
+      --notes "NOVA_CRAFT_BACKUP_VERIFIED — NOVA CRAFT re-downloaded this backup and verified its SHA-256 and ZIP CRC."; then
+    log "WARN backup bytes verified, but could not write the verification marker to the release notes"
+  fi
+  rm -rf "$work_dir" "$verify_dir"
+  log "backup published and verified $tag"
+  prune_backups
   return 0
 }
 
@@ -600,7 +1033,7 @@ else
     fi
   fi
 fi
-cd ..
+cd "$WORKSPACE_ABS" || exit 1
 
 # ------------------------------------------------------------ Playit agent --
 
@@ -609,6 +1042,7 @@ start_playit() {
   TUNNEL_MSG="No Playit.gg agent secret is stored for this repository."
   TUNNEL_ADDR=""
   TUNNEL_NAME=""
+  TUNNEL_ID=""
   TUNNEL_PROTO=""
   TUNNEL_ISSUE=""
   AGENT_ID=""
@@ -617,14 +1051,25 @@ start_playit() {
   fi
 
   local url="https://github.com/playit-cloud/playit-agent/releases/download/v1.0.10/playit-linux-amd64"
-  if [ ! -x playit ]; then
-    curl -fL --retry 3 -o playit.tmp "$url" || { TUNNEL_STATE=error; TUNNEL_MSG="Playit agent download failed"; return 0; }
-    if [ ! -s playit.tmp ]; then TUNNEL_STATE=error; TUNNEL_MSG="Playit agent download was empty"; return 0; fi
-    chmod +x playit.tmp
-    mv playit.tmp playit
+  local expected_sha="2df7d9f10227ab312b1ad341853db4e8a8243df5cfcdbae58713a4271711c339"
+  if [ -x "$WORKSPACE_ABS/playit" ] && ! printf '%s  %s\n' "$expected_sha" "$WORKSPACE_ABS/playit" | sha256sum -c --status; then
+    log "cached Playit agent checksum mismatch; discarding binary"
+    rm -f "$WORKSPACE_ABS/playit"
+  fi
+  if [ ! -x "$WORKSPACE_ABS/playit" ]; then
+    curl -fL --retry 3 -o "$WORKSPACE_ABS/playit.tmp" "$url" || { TUNNEL_STATE=error; TUNNEL_MSG="Playit agent download failed"; return 0; }
+    if [ ! -s "$WORKSPACE_ABS/playit.tmp" ]; then TUNNEL_STATE=error; TUNNEL_MSG="Playit agent download was empty"; return 0; fi
+    if ! printf '%s  %s\n' "$expected_sha" "$WORKSPACE_ABS/playit.tmp" | sha256sum -c --status; then
+      rm -f "$WORKSPACE_ABS/playit.tmp"
+      TUNNEL_STATE=error
+      TUNNEL_MSG="Playit agent checksum verification failed; the binary was rejected."
+      return 0
+    fi
+    chmod +x "$WORKSPACE_ABS/playit.tmp"
+    mv "$WORKSPACE_ABS/playit.tmp" "$WORKSPACE_ABS/playit"
   fi
 
-  ( cd "$DATA_ABS" && SECRET_KEY="$PLAYIT_SECRET_KEY" nohup ../playit > playit.log 2>&1 & echo $! > /tmp/nova-playit.pid )
+  ( cd "$DATA_ABS" && SECRET_KEY="$PLAYIT_SECRET_KEY" nohup "$WORKSPACE_ABS/playit" > playit.log 2>&1 & echo $! > /tmp/nova-playit.pid )
   sleep 3
   PLAYIT_PID="$(cat /tmp/nova-playit.pid 2>/dev/null || echo "")"
   if [ -z "$PLAYIT_PID" ] || ! kill -0 "$PLAYIT_PID" 2>/dev/null; then
@@ -647,7 +1092,7 @@ start_playit() {
     rm -f /tmp/nova-rundata.json /tmp/nova-tunnel.env
     playit_api /v1/agents/rundata '{}' > /tmp/nova-rundata.json 2>/dev/null || true
     [ -s /tmp/nova-rundata.json ] || return 1
-    python3 nova-craft/playit.py parse /tmp/nova-rundata.json /tmp/nova-tunnel.env "$EDITION" > /dev/null || return 1
+    python3 nova-craft/playit.py parse /tmp/nova-rundata.json /tmp/nova-tunnel.env "$EDITION" "$PLAYIT_TUNNEL_ID" > /dev/null || return 1
     . /tmp/nova-tunnel.env
     [ -n "$TUNNEL_Q_MSG" ] && TUNNEL_MSG="$TUNNEL_Q_MSG"
     return 0
@@ -659,37 +1104,13 @@ start_playit() {
     return 0
   fi
 
-  # ---------------------------------------------------- create once if needed
-  if [ "$TUNNEL_STATE" = "missing" ] && [ -n "$AGENT_ID" ] && [ "${NOVA_ALLOW_TUNNEL_CREATE:-true}" = "true" ]; then
-    if [ "$EDITION" = "BEDROCK" ]; then TTYPE=minecraft-bedrock; else TTYPE=minecraft-java; fi
-    log "no $TTYPE tunnel yet; creating one through the agent API"
-    BODY="$(python3 nova-craft/playit.py body "$AGENT_ID" "$TTYPE" "NOVA $SID")"
-    playit_api /v1/tunnels/create "$BODY" > /tmp/nova-create.json 2>/dev/null || true
-    CREATE_MSG="$(python3 nova-craft/playit.py explain /tmp/nova-create.json 2>/dev/null || echo unknown)"
-    log "playit create -> $CREATE_MSG"
-    if [ "$CREATE_MSG" != "created" ]; then
-      TUNNEL_STATE=missing
-      TUNNEL_MSG="Playit refused automatic tunnel creation ($CREATE_MSG). Create a Minecraft tunnel for this agent at playit.gg/account/tunnels, then start again."
-      return 0
-    fi
-    sleep 8
-    refresh_tunnel || true
+  # Tunnel creation is deliberately not performed here. The user creates the
+  # Minecraft Tunnel in Playit's dashboard; this runner only reads rundata.
+  if [ "$TUNNEL_STATE" = "missing" ]; then
+    TUNNEL_MSG="No matching Playit Tunnel was reported. Create one manually in the Playit dashboard; NOVA CRAFT will not create it."
   fi
-
-  # ----------------------------- verify: real TCP connect while agent is alive
   if [ -n "$TUNNEL_ADDR" ] && [ "$TUNNEL_STATE" = "allocated" ]; then
-    for _ in 1 2 3 4 5 6 7 8; do
-      if probe_tunnel "$TUNNEL_ADDR"; then
-        TUNNEL_STATE=connected
-        TUNNEL_MSG="Playit reports $TUNNEL_ADDR and it accepted a TCP connection."
-        return 0
-      fi
-      kill -0 "$PLAYIT_PID" 2>/dev/null || break
-      sleep 6
-    done
-    TUNNEL_STATE=allocated
-    TUNNEL_MSG="Playit reports $TUNNEL_ADDR but nothing answered on it yet."
-    return 0
+    TUNNEL_MSG="Playit reports $TUNNEL_ADDR. Waiting for a successful Minecraft protocol ping."
   fi
 
   if [ "$TUNNEL_STATE" = "disabled" ]; then
@@ -703,13 +1124,15 @@ TUNNEL_STATE=unknown
 TUNNEL_MSG=""
 TUNNEL_ADDR=""
 TUNNEL_NAME=""
+TUNNEL_ID=""
 TUNNEL_PROTO=""
 TUNNEL_ISSUE=""
 AGENT_ID=""
 PLAYIT_PID=""
 start_playit
+LAST_TUNNEL_REFRESH=$(date +%s)
 
-export TUNNEL_STATE TUNNEL_MSG TUNNEL_ADDR TUNNEL_NAME TUNNEL_PROTO TUNNEL_ISSUE AGENT_ID
+export TUNNEL_STATE TUNNEL_MSG TUNNEL_ADDR TUNNEL_NAME TUNNEL_ID TUNNEL_PROTO TUNNEL_ISSUE AGENT_ID
 
 # ---------------------------------------------------------------- runtime ---
 
@@ -724,10 +1147,27 @@ else
   LD_LIBRARY_PATH=. ./bedrock_server < "$FIFO" > server.log 2>&1 &
 fi
 SRV_PID=$!
-cd ..
+cd "$WORKSPACE_ABS" || exit 1
 log "server pid $SRV_PID"
 
 send_cmd() { printf '%s\n' "$1" >&7 2>/dev/null || true; }
+
+wait_for_save() {
+  local start_offset="$1" log_file="$DATA_ABS/server.log" pattern
+  if [ "$EDITION" = "BEDROCK" ]; then
+    pattern='Data saved\. Files are now ready to be copied'
+  else
+    pattern='Saved the game|All chunks are saved'
+  fi
+  for _ in $(seq 1 150); do
+    if [ -f "$log_file" ] && tail -c +$((start_offset + 1)) "$log_file" 2>/dev/null | grep -qiE "$pattern"; then
+      return 0
+    fi
+    kill -0 "$SRV_PID" 2>/dev/null || return 1
+    sleep 2
+  done
+  return 1
+}
 
 SERVER_READY=false
 READY_DEADLINE=$(( $(date +%s) + 900 ))
@@ -760,12 +1200,15 @@ players_count() {
 parse_players() { echo "$1" | grep -oE "[0-9]+" | head -1; }
 parse_max() { echo "$1" | grep -oE "[0-9]+" | sed -n 2p; }
 
+# Start the five-hour runtime budget only after the server is actually ready.
+JOB_STARTED=$(date +%s)
 publish_status ready true "server-ready" "$(parse_players "$(players_count)")" "$(parse_max "$(players_count)")" "$TUNNEL_STATE" "$TUNNEL_MSG"
 publish_live "$DATA_ABS/server.log"
 publish_files
 
 STOP_FLAG=/tmp/nova-stop
-rm -f "$STOP_FLAG"
+BACKUP_REQUEST_FLAG=/tmp/nova-backup-request
+rm -f "$STOP_FLAG" "$BACKUP_REQUEST_FLAG"
 BACKUP_DONE=false
 LAST_FILE_REQ=""
 LAST_FILES_PUBLISH=$(date +%s)
@@ -782,9 +1225,16 @@ poll_commands() {
       sha="$(gh api "repos/$REPO/contents/nova-craft/commands/$f" --jq .sha 2>/dev/null)"
       case "$cmd" in
         "nova:stop") touch "$STOP_FLAG"; send_cmd "say NOVA CRAFT is stopping";;
-        "nova:backup") log "backup requested from the app";;
+        "nova:backup") touch "$BACKUP_REQUEST_FLAG"; log "backup requested from the app";;
         "") : ;;
-        *) log "command: $cmd"; send_cmd "$cmd";;
+        *)
+          if [ "$ALLOW_COMMANDS" = "true" ]; then
+            log "manual command accepted"
+            send_cmd "$cmd"
+          else
+            log "manual command rejected: console commands are disabled"
+          fi
+          ;;
       esac
       [ -n "$sha" ] && gh api -X DELETE "repos/$REPO/contents/nova-craft/commands/$f" \
         -f message="nova: command consumed" -f sha="$sha" > /dev/null 2>&1 || true
@@ -796,17 +1246,44 @@ poll_commands() {
 heartbeat() {
   while kill -0 "$SRV_PID" 2>/dev/null; do
     sleep 30
-    local players line latency
+    local players line latency now
     line="$(players_count)"
     players="$(parse_players "$line")"
-    # Probe the address Playit actually reported, never the (often empty)
-    # address configured by hand.
-    if probe_tunnel "${TUNNEL_ADDR:-$TUNNEL}"; then
+    # Re-read Playit's official agent state once per minute so late address
+    # allocation, address changes, and disabled Tunnels are reflected promptly.
+    if [ -n "$PLAYIT_PID" ]; then
+      now=$(date +%s)
+      if [ $((now - LAST_TUNNEL_REFRESH)) -ge 60 ]; then
+        LAST_TUNNEL_REFRESH=$now
+        if refresh_tunnel; then
+          case "$TUNNEL_STATE" in
+            allocated) TUNNEL_MSG="Playit reports $TUNNEL_ADDR. Waiting for a successful Minecraft protocol ping." ;;
+            disabled) TUNNEL_MSG="Playit reports this tunnel as disabled (${TUNNEL_ISSUE:-no reason given})." ;;
+            error) TUNNEL_MSG="The Playit agent API returned an error during refresh." ;;
+            missing) [ -n "$TUNNEL_MSG" ] || TUNNEL_MSG="No matching Playit Tunnel was reported yet." ;;
+          esac
+          export TUNNEL_STATE TUNNEL_MSG TUNNEL_ADDR TUNNEL_NAME TUNNEL_ID TUNNEL_PROTO TUNNEL_ISSUE AGENT_ID
+        else
+          TUNNEL_STATE=error
+          TUNNEL_MSG="The Playit agent API did not answer during refresh."
+        fi
+      fi
+    fi
+    # Probe only the address returned by Playit's API and require a successful
+    # Minecraft protocol ping (Java TCP status or Bedrock RakNet/UDP).
+    if [ -n "$PLAYIT_PID" ] && ! kill -0 "$PLAYIT_PID" 2>/dev/null; then
+      TUNNEL_STATE=error
+      TUNNEL_MSG="The Playit agent stopped while the server was running."
+    elif [ -n "$TUNNEL_ADDR" ] && { [ "$TUNNEL_STATE" = "allocated" ] || [ "$TUNNEL_STATE" = "connected" ]; } && probe_tunnel "$TUNNEL_ADDR"; then
       TUNNEL_STATE=connected
-      TUNNEL_MSG="Public address accepted a TCP connection."
+      if [ "$EDITION" = "BEDROCK" ]; then
+        TUNNEL_MSG="Playit's reported address answered a Bedrock RakNet ping."
+      else
+        TUNNEL_MSG="Playit's reported address answered a Java Server List Ping."
+      fi
     elif [ "$TUNNEL_STATE" = "connected" ]; then
-      TUNNEL_STATE=connecting
-      TUNNEL_MSG="The public address stopped accepting connections."
+      TUNNEL_STATE=allocated
+      TUNNEL_MSG="Playit still reports the address, but its game-protocol ping did not succeed."
     fi
     latency=""
     publish_status ready true "server-ready" "$players" "$(parse_max "$line")" "$TUNNEL_STATE" "$TUNNEL_MSG" "$latency"
@@ -821,23 +1298,64 @@ heartbeat() {
 poll_commands & POLL_PID=$!
 heartbeat & HB_PID=$!
 
+perform_manual_backup() {
+  local save_log_offset
+  rm -f "$BACKUP_REQUEST_FLAG"
+  log "starting an on-demand, consistency-protected backup"
+  save_log_offset="$(wc -c < "$DATA_ABS/server.log" 2>/dev/null || echo 0)"
+  if [ "$EDITION" = "BEDROCK" ]; then
+    send_cmd "save hold"
+    send_cmd "save query"
+  else
+    send_cmd "save-off"
+    send_cmd "save-all flush"
+  fi
+  if wait_for_save "$save_log_offset"; then
+    if backup_now "manual"; then
+      log "on-demand backup completed and verified"
+    else
+      log "ERROR on-demand backup did not complete"
+    fi
+  else
+    log "ERROR save acknowledgement timed out; refusing to archive a possibly changing world"
+  fi
+  if [ "$EDITION" = "BEDROCK" ]; then
+    send_cmd "save resume"
+  else
+    send_cmd "save-on"
+  fi
+}
+
 while kill -0 "$SRV_PID" 2>/dev/null; do
   if [ -f "$STOP_FLAG" ]; then log "stop requested from the app"; break; fi
   if [ $(( $(date +%s) - JOB_STARTED )) -ge "$MAXSEC" ]; then log "cycle time limit reached"; break; fi
+  if [ -f "$BACKUP_REQUEST_FLAG" ]; then perform_manual_backup; fi
   sleep 10
 done
 
 kill "$POLL_PID" "$HB_PID" 2>/dev/null || true
 
-# Safe shutdown: freeze writes, flush, archive, then stop.
+# Safe shutdown: flush and hold writes using edition-appropriate commands,
+# verify the release backup, resume saves, then stop the server process.
 publish_status stopping false "stopping"
-send_cmd "save-off"
-send_cmd "save-all flush"
-sleep 6
-cd "$DATA_ABS" || true
-if backup_now "cycle"; then BACKUP_DONE=true; fi
-cd ..
-send_cmd "save-on"
+SAVE_LOG_OFFSET="$(wc -c < "$DATA_ABS/server.log" 2>/dev/null || echo 0)"
+if [ "$EDITION" = "BEDROCK" ]; then
+  send_cmd "save hold"
+  send_cmd "save query"
+else
+  send_cmd "save-off"
+  send_cmd "save-all flush"
+fi
+if wait_for_save "$SAVE_LOG_OFFSET"; then
+  if backup_now "cycle"; then BACKUP_DONE=true; fi
+else
+  log "ERROR save acknowledgement timed out; refusing to archive a possibly changing world"
+fi
+if [ "$EDITION" = "BEDROCK" ]; then
+  send_cmd "save resume"
+else
+  send_cmd "save-on"
+fi
 send_cmd "stop"
 for _ in $(seq 1 45); do kill -0 "$SRV_PID" 2>/dev/null || break; sleep 2; done
 if kill -0 "$SRV_PID" 2>/dev/null; then log "server did not stop in time; killing"; kill -9 "$SRV_PID" 2>/dev/null || true; fi
@@ -867,97 +1385,98 @@ fi
   /// Playit agent-API helper executed on the runner (no secret is printed).
   static const String playitScript = r'''
 #!/usr/bin/env python3
-"""Playit.gg agent-API helper for the NOVA CRAFT runner.
-
-Playit's public web API requires an account session (Playit Premium partner
-keys for some calls), but every agent authenticates with its own secret via
-`Authorization: Agent-Key <secret>`. These are the same documented endpoints
-the official agent and official Minecraft plugin use:
-
-  POST https://api.playit.gg/v1/agents/rundata
-  POST https://api.playit.gg/v1/tunnels/create
-  POST https://api.playit.gg/v1/tunnels/list
-
-The helper never prints the secret.
-
-modes
-  parse   <rundata.json> <out.env> [edition]  -> shell assignments
-  body    <agent_id> <type> <name>            -> create request JSON
-  explain <create.json>                       -> human readable failure code
-"""
+# Select only a user-designated tunnel or the single unambiguous matching one.
+# This helper never creates tunnels and never prints the agent secret.
 import json
 import shlex
 import sys
 
-TYPES = {"java": "minecraft-java", "bedrock": "minecraft-bedrock"}
+TYPES = {"JAVA": "minecraft-java", "BEDROCK": "minecraft-bedrock"}
 
 
 def load(path):
     try:
         with open(path, "r", encoding="utf-8") as handle:
-            return json.load(handle)
+            value = json.load(handle)
+        return value if isinstance(value, dict) else {}
     except (OSError, ValueError):
         return {}
 
 
 def unwrap(raw):
-    """Playit wraps results as {status, data} / {status, fail} / {status, error}."""
     if not isinstance(raw, dict):
         return {}, "invalid-response"
-    status = raw.get("status")
+    status = str(raw.get("status", "")).lower()
     if status in ("fail", "error"):
-        detail = raw.get("fail") or raw.get("error") or status
-        return {}, detail if isinstance(detail, str) else json.dumps(detail)
+        return {}, "api-error"
     data = raw.get("data")
     if isinstance(data, dict):
         return data, ""
-    if isinstance(raw.get("success"), dict):
-        return raw["success"], ""
+    success = raw.get("success")
+    if isinstance(success, dict):
+        return success, ""
     return raw, ""
 
 
-def pick_tunnel(tunnels, edition):
-    want = TYPES.get((edition or "java").lower(), "minecraft-java")
-    for tunnel in tunnels:
-        if (tunnel.get("tunnel_type") or "") == want:
-            return tunnel
-    return None
+def tunnel_id(tunnel):
+    return str(tunnel.get("tunnel_id") or tunnel.get("id") or "")
+
+
+def pick_tunnel(tunnels, edition, requested_id):
+    wanted = TYPES.get(edition.upper(), TYPES["JAVA"])
+    matching = [t for t in tunnels if str(t.get("tunnel_type") or "") == wanted]
+    if requested_id:
+        selected = next((t for t in tunnels if tunnel_id(t) == requested_id), None)
+        if selected is None:
+            return None, "The selected Playit Tunnel was not returned by the agent."
+        if str(selected.get("tunnel_type") or "") != wanted:
+            return None, "The selected Playit Tunnel does not match this server edition."
+        return selected, ""
+    if len(matching) == 1:
+        return matching[0], ""
+    if len(matching) > 1:
+        return None, "Several matching Playit Tunnels exist; select one in NOVA CRAFT."
+    if tunnels:
+        return None, "No Tunnel for this server edition was reported. Create one manually in Playit."
+    return None, "This Playit agent has no Tunnel yet. Create one manually in Playit."
 
 
 def parse(argv):
     raw = load(argv[0])
     out_path = argv[1]
-    edition = argv[2] if len(argv) > 2 else "java"
+    edition = argv[2] if len(argv) > 2 else "JAVA"
+    requested_id = argv[3] if len(argv) > 3 else ""
     data, error = unwrap(raw)
     tunnels = [t for t in (data.get("tunnels") or []) if isinstance(t, dict)]
-    chosen = pick_tunnel(tunnels, edition)
+    chosen, message = pick_tunnel(tunnels, edition, requested_id) if not error else (None, "")
     values = {
         "AGENT_ID": str(data.get("agent_id") or ""),
         "TUNNEL_STATE": "missing",
         "TUNNEL_Q_MSG": "",
+        "TUNNEL_ADDR": "",
+        "TUNNEL_NAME": "",
+        "TUNNEL_ID": "",
+        "TUNNEL_PROTO": "",
+        "TUNNEL_ISSUE": "",
     }
     if error:
         values["TUNNEL_STATE"] = "error"
-        values["TUNNEL_Q_MSG"] = "Playit API answered with: " + error[:200]
+        values["TUNNEL_Q_MSG"] = "Playit agent API returned an error; check the Agent key and network."
     elif chosen:
         reason = chosen.get("disabled_reason")
         if isinstance(reason, dict):
-            reason = reason.get("type") or json.dumps(reason)
+            reason = reason.get("type") or "disabled"
         values["TUNNEL_STATE"] = "disabled" if reason else "allocated"
         values["TUNNEL_ADDR"] = str(chosen.get("display_address") or "")
         values["TUNNEL_NAME"] = str(chosen.get("name") or "")
+        values["TUNNEL_ID"] = tunnel_id(chosen)
         values["TUNNEL_PROTO"] = str(chosen.get("port_type") or "")
         values["TUNNEL_ISSUE"] = str(reason or "")
         if not values["TUNNEL_ADDR"]:
             values["TUNNEL_STATE"] = "missing"
-            values["TUNNEL_Q_MSG"] = "Playit has not allocated a public address for this tunnel yet."
+            values["TUNNEL_Q_MSG"] = "Playit has not allocated a public address for this Tunnel yet."
     else:
-        count = len(tunnels)
-        values["TUNNEL_Q_MSG"] = (
-            "This agent has %d tunnel(s) but none of type %s." % (count, TYPES.get(edition, "minecraft-java"))
-            if count
-            else "This Playit agent has no tunnel yet."
-        )
+        values["TUNNEL_Q_MSG"] = message
     with open(out_path, "w", encoding="utf-8") as handle:
         for key, value in values.items():
             handle.write("%s=%s\n" % (key, shlex.quote(value)))
@@ -965,56 +1484,11 @@ def parse(argv):
     return 0
 
 
-def body(argv):
-    agent_id, tunnel_type, name = argv[0], argv[1], argv[2]
-    local_port = "19132" if tunnel_type == TYPES["bedrock"] else "25565"
-    print(json.dumps({
-        "name": name[:20],
-        "ports": {"type": "tunnel-type", "details": tunnel_type},
-        "origin": {
-            "type": "agent",
-            "data": {
-                "agent_id": agent_id,
-                "config": {"fields": [
-                    {"name": "local_ip", "value": "127.0.0.1"},
-                    {"name": "local_port", "value": local_port},
-                ]},
-            },
-        },
-        "enabled": True,
-    }))
-    return 0
-
-
-def explain(argv):
-    raw = load(argv[0])
-    data, error = unwrap(raw)
-    if error:
-        print(error)
-    elif data.get("id") or data.get("tunnel_id"):
-        print("created")
-    else:
-        print(json.dumps(raw)[:200])
-    return 0
-
-
-def main(argv):
-    if len(argv) < 3:
-        print(__doc__, file=sys.stderr)
-        return 2
-    mode = argv[1]
-    if mode == "parse":
-        return parse(argv[2:])
-    if mode == "body":
-        return body(argv[2:])
-    if mode == "explain":
-        return explain(argv[2:])
-    print("unknown mode", file=sys.stderr)
-    return 2
-
-
 if __name__ == "__main__":
-    sys.exit(main(sys.argv))
+    if len(sys.argv) < 4 or sys.argv[1] != "parse":
+        print("usage: playit.py parse <rundata.json> <out.env> [edition] [tunnel_id]", file=sys.stderr)
+        sys.exit(2)
+    sys.exit(parse(sys.argv[2:]))
 ''';
 
   /// Executed on the runner; see the docstring for the path guarantees.
