@@ -86,13 +86,13 @@ jobs:
           NOVA_KEYSTORE_PATH: ${{ runner.temp }}/nova-release.p12
         run: |
           set -euo pipefail
+          exec > >(tee /tmp/build-step.log) 2>&1
           mkdir -p delivery
           if [ -n "${NOVA_KEYSTORE_BASE64:-}" ] && [ -n "${NOVA_KEYSTORE_PASSWORD:-}" ]; then
             printf '%s' "$NOVA_KEYSTORE_BASE64" | base64 --decode > "$NOVA_KEYSTORE_PATH"
             flutter build apk --release --android-skip-build-dependency-validation --no-shrink 2>&1 | tee /tmp/build.log
             cp build/app/outputs/flutter-apk/app-release.apk delivery/NOVA-CRAFT-1.0.0-release.apk
             SIGNING_STORE="$NOVA_KEYSTORE_PATH"
-            SIGNING_STORE_TYPE="PKCS12"
             SIGNING_STORE_PASSWORD="$NOVA_KEYSTORE_PASSWORD"
             SIGNING_KEY_ALIAS="$NOVA_KEY_ALIAS"
             SIGNING_KEY_PASSWORD="$NOVA_KEY_PASSWORD"
@@ -107,7 +107,6 @@ jobs:
               cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk delivery/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk
             fi
             SIGNING_STORE="$HOME/.android/debug.keystore"
-            SIGNING_STORE_TYPE="JKS"
             SIGNING_STORE_PASSWORD="android"
             SIGNING_KEY_ALIAS="androiddebugkey"
             SIGNING_KEY_PASSWORD="android"
@@ -124,7 +123,6 @@ jobs:
             "$ZIPALIGN" -f -p 4 "$APK" "$ALIGNED"
             "$APKSIGNER" sign \
               --ks "$SIGNING_STORE" \
-              --ks-type "$SIGNING_STORE_TYPE" \
               --ks-key-alias "$SIGNING_KEY_ALIAS" \
               --ks-pass env:NOVA_APK_KS_PASS \
               --key-pass env:NOVA_APK_KEY_PASS \
@@ -216,8 +214,11 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Build failed. Inspect the analyze/test output above." >> "$GITHUB_STEP_SUMMARY"
-          if [ -s /tmp/build.log ]; then
+          echo "Build failed. Inspect the build/signing step logs above." >> "$GITHUB_STEP_SUMMARY"
+          if [ -s /tmp/build-step.log ]; then
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -f body="$(tail -c 55000 /tmp/build-step.log || true)" || true
+          elif [ -s /tmp/build.log ]; then
             gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
               -f body="$(tail -c 55000 /tmp/build.log || true)" || true
           fi
