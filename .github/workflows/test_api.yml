@@ -1,0 +1,8 @@
+name: Test API
+on: push
+jobs:
+  test:
+    runs-on: ubuntu-24.04
+    steps:
+      - run: curl -s https://fill.papermc.io/v3/projects/paper > paper.json && cat paper.json
+      - run: curl -s https://fill.papermc.io/v3/projects/paper/versions/1.20.4/builds > builds.json && cat builds.json || true
