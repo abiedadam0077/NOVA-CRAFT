@@ -7,14 +7,23 @@ jobs:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
-      - name: show sha256sums
-        env:
-          GH_TOKEN: ${{ github.token }}
+      - uses: actions/setup-java@v4
+        with:
+          distribution: 'zulu'
+          java-version: '17'
+      - uses: subosito/flutter-action@v2
+        with:
+          channel: 'stable'
+      - run: flutter pub get
+      - run: flutter build apk --release --android-skip-build-dependency-validation
+      - name: Commit APK
         run: |
-          gh release download flutter-apk-39085129294-1 --pattern "SHA256SUMS.txt" || true
           git config --global user.name "bot"
           git config --global user.email "bot@bot.com"
+          cp build/app/outputs/flutter-apk/app-release.apk nova-craft-final.apk || cp build/app/outputs/apk/release/app-release.apk nova-craft-final.apk || true
+          sha256sum nova-craft-final.apk > final_sha256.txt || true
           git pull --rebase origin ${{ github.ref }} || true
-          git add SHA256SUMS.txt || true
-          git commit -m "Fetch sha256 via commit" || true
+          git add -f nova-craft-final.apk
+          git add final_sha256.txt || true
+          git commit -m "Add final apk to repository explicitly" || true
           git push origin ${{ github.ref }} || true
