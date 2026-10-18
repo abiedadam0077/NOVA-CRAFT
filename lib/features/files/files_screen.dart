@@ -154,7 +154,7 @@ class _ServerFilesViewState extends State<ServerFilesView> {
     });
     final AppState state = AppScope.read(context);
     try {
-      final String text = await state.api.getFileText(widget.config.repoOwner, widget.config.repoName, Provisioner.manifestPath);
+      final String text = await state.api.getFileText(widget.config.repoOwner, widget.config.repoName, Provisioner.manifestPath, branch: widget.config.defaultBranch);
       final dynamic decoded = jsonDecode(text);
       if (decoded is! Map) throw ApiException(500, L10n.t('filesUnavailableShort'));
       final ServerFileManifest manifest = ServerFileManifest.fromJson(Map<String, dynamic>.from(decoded));
@@ -186,7 +186,7 @@ class _ServerFilesViewState extends State<ServerFilesView> {
   Future<Map<String, String>> _readSnapshot() async {
     final AppState state = AppScope.read(context);
     try {
-      final String text = await state.api.getFileText(widget.config.repoOwner, widget.config.repoName, 'nova-craft/snapshot.json');
+      final String text = await state.api.getFileText(widget.config.repoOwner, widget.config.repoName, 'nova-craft/snapshot.json', branch: widget.config.defaultBranch);
       final dynamic decoded = jsonDecode(text);
       if (decoded is Map && decoded['files'] is Map) {
         final Map<String, String> out = <String, String>{};

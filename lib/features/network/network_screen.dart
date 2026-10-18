@@ -49,6 +49,8 @@ class _NetworkViewState extends State<NetworkView> {
   bool _testing = false;
   bool _saving = false;
   bool _savingSecret = false;
+  bool _linkingPlayit = false;
+  bool _pollingPlayit = false;
   bool _secretPresent = false;
   bool _checkedSecret = false;
   String? _secretError;
@@ -128,6 +130,70 @@ class _NetworkViewState extends State<NetworkView> {
       showNovaToast(context, Fmt.error(error), kind: ToastKind.error);
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _unlinkPlayit() async {
+    final bool ok = await showNovaConfirm(
+      context,
+      title: L10n.t('unlinkPlayit'),
+      body: L10n.t('unlinkPlayitConfirm'),
+      confirmLabel: L10n.t('unlinkPlayit'),
+      icon: Icons.link_off_rounded,
+    );
+    if (!ok || !mounted) return;
+    final AppState state = AppScope.read(context);
+    await state.forgetPlayitSecret();
+    _checkSecret();
+  }
+
+  Future<void> _linkPlayit() async {
+    setState(() {
+      _linkingPlayit = true;
+      _pollingPlayit = true;
+      _secretError = null;
+    });
+    try {
+      final AppState state = AppScope.read(context);
+      final String code = PlayitApi.generateClaimCode();
+      final PlayitApi api = PlayitApi();
+      final String url = await api.claimSetup(code);
+      if (!mounted) return;
+      
+      // Open the browser
+      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
+      
+      // Start polling
+      int attempts = 0;
+      while (_pollingPlayit && mounted && attempts < 60) {
+        await Future<void>.delayed(const Duration(seconds: 3));
+        attempts++;
+        if (!mounted || !_pollingPlayit) break;
+        
+        final String? secret = await api.claimExchange(code);
+        if (secret != null && secret.isNotEmpty) {
+          await state.savePlayitSecret(secret);
+          await Provisioner.writePlayitSecret(state.api, widget.config, secret);
+          if (mounted) {
+            showNovaToast(context, L10n.t('playitLinked'), kind: ToastKind.success);
+            _checkSecret();
+            _checkPlayit();
+          }
+          break;
+        }
+      }
+      api.dispose();
+      
+      if (attempts >= 60 && mounted) {
+        setState(() => _secretError = L10n.t('playitLinkTimeout'));
+      }
+    } catch (error) {
+      if (mounted) setState(() => _secretError = Fmt.error(error));
+    } finally {
+      if (mounted) setState(() {
+        _linkingPlayit = false;
+        _pollingPlayit = false;
+      });
     }
   }
 
@@ -421,37 +487,53 @@ class _NetworkViewState extends State<NetworkView> {
                 InlineError(message: _secretError!, onRetry: _checkSecret),
               ],
               const SizedBox(height: 10),
-              NovaField(
-                controller: _secret,
-                label: L10n.t('playitKeyLabel'),
-                hint: '••••••••••••',
-                prefixIcon: Icons.password_rounded,
-                obscure: true,
-                helper: L10n.t('playitKeyBody'),
-              ),
-              const SizedBox(height: 10),
-              Row(
-                children: <Widget>[
-                  Expanded(
-                    child: NovaButton(
-                      label: L10n.t('saveAsSecret'),
-                      size: NovaButtonSize.compact,
-                      variant: NovaButtonVariant.secondary,
-                      loading: _savingSecret,
-                      onPressed: _savingSecret ? null : _saveSecret,
+              if (!_secretPresent) ...[
+                const SizedBox(height: 10),
+                NovaButton(
+                  label: _linkingPlayit ? L10n.t('waitingForBrowser') : L10n.t('connectPlayit'),
+                  icon: Icons.link_rounded,
+                  loading: _linkingPlayit,
+                  onPressed: _linkingPlayit ? null : _linkPlayit,
+                ),
+                const SizedBox(height: 10),
+                Row(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: [
+                    Icon(Icons.info_outline_rounded, size: 16, color: p.textMuted),
+                    const SizedBox(width: 6),
+                    Expanded(
+                      child: Text(
+                        L10n.t('playitLinkInstructions'),
+                        style: NovaTextStyles.caption(p.textMuted),
+                      ),
                     ),
-                  ),
-                  const SizedBox(width: 8),
-                  Expanded(
-                    child: NovaButton(
-                      label: L10n.t('openPlayitDashboard'),
-                      size: NovaButtonSize.compact,
-                      variant: NovaButtonVariant.ghost,
-                      onPressed: () => launchUrl(Uri.parse(AppConfig.playitDashboard), mode: LaunchMode.externalApplication),
+                  ],
+                ),
+              ],
+              if (_secretPresent) ...[
+                const SizedBox(height: 10),
+                Row(
+                  children: [
+                    Expanded(
+                      child: NovaButton(
+                        label: L10n.t('openPlayitDashboard'),
+                        size: NovaButtonSize.compact,
+                        variant: NovaButtonVariant.secondary,
+                        onPressed: () => launchUrl(Uri.parse(AppConfig.playitDashboard), mode: LaunchMode.externalApplication),
+                      ),
                     ),
-                  ),
-                ],
-              ),
+                    const SizedBox(width: 8),
+                    Expanded(
+                      child: NovaButton(
+                        label: L10n.t('unlinkPlayit'),
+                        size: NovaButtonSize.compact,
+                        variant: NovaButtonVariant.ghost,
+                        onPressed: _unlinkPlayit,
+                      ),
+                    ),
+                  ],
+                ),
+              ],
             ],
           ),
         ),

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:math';
 
 import 'package:http/http.dart' as http;
 
@@ -209,6 +210,57 @@ class PlayitApi {
     if (text.contains('SocketException') || text.contains('ClientException')) return 'network-error';
     if (text.contains('TimeoutException')) return 'timeout';
     return text.length > 160 ? '${text.substring(0, 160)}…' : text;
+  }
+
+
+  static String generateClaimCode() {
+    final Random random = Random.secure();
+    final List<int> bytes = List<int>.generate(5, (_) => random.nextInt(256));
+    return bytes.map((int b) => b.toRadixString(16).padLeft(2, '0')).join();
+  }
+
+  /// Initiates a guest agent claim setup and returns the URL to open in the browser.
+  Future<String> claimSetup(String code) async {
+    final http.Response response = await _client
+        .post(
+          Uri.parse('$apiBase/claim/setup'),
+          headers: <String, String>{
+            'Content-Type': 'application/json',
+            'User-Agent': AppConfig.userAgent,
+          },
+          body: jsonEncode(<String, dynamic>{
+            'code': code,
+            'agent_type': 'assignable',
+            'version': AppConfig.userAgent,
+          }),
+        )
+        .timeout(_timeout);
+    _unwrap(response);
+    return 'https://playit.gg/claim/$code';
+  }
+
+  /// Exchanges a claimed code for the secret key. Returns null if still waiting.
+  Future<String?> claimExchange(String code) async {
+    final http.Response response = await _client
+        .post(
+          Uri.parse('$apiBase/claim/exchange'),
+          headers: <String, String>{
+            'Content-Type': 'application/json',
+            'User-Agent': AppConfig.userAgent,
+          },
+          body: jsonEncode(<String, dynamic>{'code': code}),
+        )
+        .timeout(_timeout);
+        
+    try {
+      final Map<String, dynamic> result = _unwrap(response);
+      return result['secret_key']?.toString();
+    } on _PlayitFailure catch (error) {
+      if (error.message == 'CodeNotFound' || error.message == 'WaitingForUser' || error.message == 'WaitingForUserVisit') {
+        return null; // Not ready yet
+      }
+      rethrow;
+    }
   }
 
   void dispose() => _client.close();

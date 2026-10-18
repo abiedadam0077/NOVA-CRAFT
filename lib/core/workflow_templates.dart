@@ -219,11 +219,11 @@ log() { echo "[nova] $*"; }
 # ---------------------------------------------------------------- utilities --
 
 api_content_sha() {
-  gh api "repos/$REPO/contents/$1" --jq .sha 2>/dev/null || echo ""
+  gh api "repos/$REPO/contents/$1?ref=$REF" --jq .sha 2>/dev/null || echo ""
 }
 
 api_content_text() {
-  gh api "repos/$REPO/contents/$1" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true
+  gh api "repos/$REPO/contents/$1?ref=$REF" --jq .content 2>/dev/null | base64 -d 2>/dev/null || true
 }
 
 # put_file <path> <text> <message>  — skips the commit when content is unchanged.
@@ -325,7 +325,7 @@ apply_file_request() {
   local sha payload_text
   sha="$(api_content_sha "nova-craft/files/request.json")"
   [ -n "$sha" ] || return 0
-  payload_text="$(gh api "repos/$REPO/contents/nova-craft/files/request.json" --jq .content 2>/dev/null | base64 -d 2>/dev/null)"
+  payload_text="$(gh api "repos/$REPO/contents/nova-craft/files/request.json?ref=$REF" --jq .content 2>/dev/null | base64 -d 2>/dev/null)"
   [ -n "$payload_text" ] || return 0
   local req_id
   printf '%s' "$payload_text" > /tmp/nova-req.json
@@ -339,7 +339,7 @@ apply_file_request() {
     put_file "nova-craft/files/response.json" "$(cat /tmp/nova-res.json)" "nova: file response" || true
   fi
   gh api -X DELETE "repos/$REPO/contents/nova-craft/files/request.json" \
-    -f message="nova: file request consumed" -f sha="$sha" > /dev/null 2>&1 || true
+    -f message="nova: file request consumed" -f sha="$sha" -f branch="$REF" > /dev/null 2>&1 || true
   publish_files
 }
 
@@ -500,7 +500,7 @@ if [ -f "$INCOMING/world.zip" ]; then
     cp /tmp/nova-import.json nova-craft/import/result.json || true
     SHA="$(api_content_sha "$INCOMING/world.zip")"
     if [ -n "$SHA" ]; then
-      gh api -X DELETE "repos/$REPO/contents/$INCOMING/world.zip" -f message="nova: import applied" -f sha="$SHA" > /dev/null 2>&1 || true
+      gh api -X DELETE "repos/$REPO/contents/$INCOMING/world.zip" -f message="nova: import applied" -f sha="$SHA" -f branch="$REF" > /dev/null 2>&1 || true
     fi
   else
     cp /tmp/nova-import.json nova-craft/import/result.json || true

@@ -52,7 +52,11 @@ class _ModsViewState extends State<ModsView> {
       await _loadBranch();
       await _refreshInstalled();
       await _search();
-    });
+  
+    if (!widget.config.supportsMods && widget.config.supportsPlugins) {
+      _tab = 1;
+      _loader = _defaultLoader(1);
+    }  });
   }
 
   @override
@@ -446,23 +450,38 @@ class _ModsViewState extends State<ModsView> {
             ],
           ),
         ),
-        NovaSegmented(
-          labels: <String>[L10n.t('modsTab'), L10n.t('pluginsTab')],
-          index: _tab,
-          onChanged: (int i) {
-            setState(() {
-              _tab = i;
-              _loader = _defaultLoader(i);
-              _results = <ModrinthProject>[];
-              _installed = <DirEntry>[];
-              _loadedOnce = false;
-              _browse = true;
-            });
-            _refreshInstalled();
-            _search();
-          },
-          icons: const <IconData>[Icons.extension_rounded, Icons.widgets_rounded],
-        ),
+        if (widget.config.supportsMods && widget.config.supportsPlugins)
+          NovaSegmented(
+            labels: <String>[L10n.t('modsTab'), L10n.t('pluginsTab')],
+            index: _tab,
+            onChanged: (int i) {
+              setState(() {
+                _tab = i;
+                _loader = _defaultLoader(i);
+                _results = <ModrinthProject>[];
+                _installed = <DirEntry>[];
+                _loadedOnce = false;
+                _browse = true;
+              });
+              _refreshInstalled();
+              _search();
+            },
+            icons: const <IconData>[Icons.extension_rounded, Icons.widgets_rounded],
+          )
+        else if (widget.config.supportsMods || widget.config.supportsPlugins)
+          Container(
+            padding: const EdgeInsets.symmetric(vertical: 8, horizontal: 12),
+            decoration: BoxDecoration(color: p.cardSoft, borderRadius: NovaRadii.rMd),
+            child: Row(
+              children: <Widget>[
+                Icon(widget.config.supportsMods ? Icons.extension_rounded : Icons.widgets_rounded, color: p.violet, size: 20),
+                const SizedBox(width: 8),
+                Expanded(child: Text(widget.config.supportsMods ? L10n.t('modsTab') : L10n.t('pluginsTab'), style: NovaTextStyles.bodyStrong(p.text))),
+              ],
+            ),
+          )
+        else
+          const SizedBox(),
         const SizedBox(height: 10),
         Expanded(
           child: !_supported

@@ -1,2 +1,0 @@
-EXCHANGE ERR: HTTP Error 400: Bad Request
-ERR BODY: {"status":"fail","data":"CodeNotFound"}
