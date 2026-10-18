@@ -1,6 +1,2 @@
 Analyzing NOVA-CRAFT...                                         
-
-warning • The value of the field '_savingSecret' isn't used. Try removing the field, or using it • lib/features/network/network_screen.dart:51:8 • unused_field
-   info • Statements in an if should be enclosed in a block. Try wrapping the statement in a block • lib/features/network/network_screen.dart:193:20 • curly_braces_in_flow_control_structures
-warning • The declaration '_saveSecret' isn't referenced. Try removing the declaration of '_saveSecret' • lib/features/network/network_screen.dart:200:16 • unused_element
-
+No issues found! (ran in 9.4s)
