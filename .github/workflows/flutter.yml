@@ -157,6 +157,7 @@ jobs:
       - name: Verify APK package, signature and checksum
         run: |
           set -euo pipefail
+          exec > >(tee /tmp/verify-step.log) 2>&1
           AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt | sort -V | tail -1)
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
           ZIPALIGN=$(find "$ANDROID_HOME/build-tools" -name zipalign | sort -V | tail -1)
@@ -228,7 +229,10 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           echo "Build failed. Inspect the build/signing step logs above." >> "$GITHUB_STEP_SUMMARY"
-          if [ -s /tmp/build-step.log ]; then
+          if [ -s /tmp/verify-step.log ]; then
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -f body="$(tail -c 55000 /tmp/verify-step.log || true)" || true
+          elif [ -s /tmp/build-step.log ]; then
             gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
               -f body="$(tail -c 55000 /tmp/build-step.log || true)" || true
           elif [ -s /tmp/build.log ]; then
