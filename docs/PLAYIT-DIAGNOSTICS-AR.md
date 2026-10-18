@@ -40,6 +40,14 @@
 - فُحص قالب runner محلياً بـ`bash -n`، ومساعد Playit بـ`python3 -m py_compile`.
 - اختُبر مساعد rundata بمدخلات سلبية/إيجابية: لا Tunnel، نوع/نقل غير متوافق، عنوان غير مخصص، Tunnel Java TCP مع origin حقيقي، واختيار ID غير موجود.
 - اختُبر Java Server List Ping محلياً بخادم mock: ردّ Java صالح نجح، وقبول TCP مع بيانات Minecraft غير صالحة رُفض. هذا اختبار بروتوكول محلي، وليس اتصالاً خارجياً بـPlayit.
-- يجب أن يجتاز `flutter analyze` و`flutter test` في CI قبل اعتماد التعديلات. لم يتوفر Flutter/Dart في بيئة التحرير المحلية.
+- نجح CI للبناء الحالي: [`39124166880`](https://github.com/abiedadam0077/NOVA-CRAFT/actions/runs/39124166880)، commit `3a71772a856221c8ccd1d31e6acf704e882aff9c`. اجتاز `flutter analyze` و`flutter test` وبناء APK والتحقق من package/signature/SHA-256، ثم نزّل الأصول المنشورة وأعاد مطابقة checksums بنجاح.
+- لم يتوفر Flutter/Dart محلياً. جُرّب `dart format --output=none --set-exit-if-changed lib test` في CI منفصل؛ أبلغ عن 60 ملفاً من 61 تحتاج تنسيقاً، بينها ملفات كثيرة غير مرتبطة بالتعديل. لم أطبّق تنسيقاً شاملاً قد ينتج عنه diff واسع غير متعلق بالمهمة؛ لذلك التنسيق الآلي غير نظيف حالياً.
 - لم يُشغّل Workflow لخادم حقيقي ولم يُتحقق من اتصال Playit/Minecraft خارجي؛ مستودع الخادم الذي يحتوي `PLAYIT_SECRET_KEY` غير محدد. يلزم تزويد `OWNER/REPO` عند الرغبة في التحقق الحي؛ لا ترسل قيمة السر.
-- بيانات APK وروابط التنزيل السابقة تخص بناءً تاريخياً ولا تثبت أن APK يحتوي هذا الإصلاح. سيُحدّث تقرير التسليم ورابط APK بعد نجاح CI للبناء الجديد.
+- لم يُشغّل Android emulator/device smoke لهذا البناء؛ بناء APK والتحقق من توقيعه لا يعادلان اختبار تشغيل على جهاز.
+
+## APK الحالي المبني من الإصلاح
+
+- الإصدار `1.0.0`، الحزمة `io.github.abiedadam0077.novacraft`، وضع release، لكنه **موقّع بمفتاح debug** لا بمفتاح إنتاج. تحقق `apksigner` من سلامة التوقيع؛ لا يمكن استخدامه كتحديث فوق نسخة موقعة بمفتاح مختلف.
+- ARM64 (موصى به لمعظم هواتف Android): [تنزيل APK مباشر](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39124166880-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk) — SHA-256: `1bd16daeb6e1e99f24de9a980af33323edf086ddaa02a47d8172b9b52cf03d1a`.
+- Universal: [تنزيل APK مباشر](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39124166880-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk) — SHA-256: `100a95fe3cf9154d382084eace0664fc1b49efdfb286574121e1b62b20d8f855`.
+- [قائمة SHA-256 المنشورة](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39124166880-1/SHA256SUMS.txt)؛ أكّد CI صحة التنزيل ومطابقة البصمات بعد النشر.
