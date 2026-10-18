@@ -353,8 +353,7 @@ void main() {
 
       final AppState timeoutState = await _pumpFiles(
         tester,
-        MockClient((http.Request request) => Completer<http.Response>().future),
-        timeout: const Duration(milliseconds: 20),
+        MockClient((http.Request request) async => throw TimeoutException('mock request timed out')),
       );
       addTearDown(timeoutState.dispose);
       expect(find.text('The file request timed out'), findsOneWidget);

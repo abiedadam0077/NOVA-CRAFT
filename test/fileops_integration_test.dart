@@ -194,26 +194,16 @@ void main() {
     final String harnessText = <String>[
       r'''#!/usr/bin/env bash
 set -euo pipefail
-WORKSPACE_ABS="''',
-      workspace.path,
-      r'''"
-DATA_ABS="${DATA_ABS_OVERRIDE:-''',
-      data.path,
-      r'''}"
+WORKSPACE_ABS="$WORKSPACE_PATH"
+DATA_ABS="${DATA_ABS_OVERRIDE:-$DATA_PATH}"
 FILES_MANIFEST_STATUS=unknown
 FILES_SNAPSHOT_STATUS=unknown
-log() { printf '%s' "$*" >> "''',
-      temp.path,
-      r'''/runner.log"; }
+log() { printf '%s' "$*" >> "$TEST_TMP/runner.log"; }
 put_file() {
   local path="$1" text="$2"
   if [ "${PUT_FAIL:-0}" = "1" ]; then return 1; fi
-  mkdir -p "''',
-      temp.path,
-      r'''/published/$(dirname "$path")"
-  printf '%s' "$text" > "''',
-      temp.path,
-      r'''/published/$path"
+  mkdir -p "$TEST_TMP/published/$(dirname "$path")"
+  printf '%s' "$text" > "$TEST_TMP/published/$path"
   return 0
 }
 ''',
@@ -224,7 +214,14 @@ printf '__FILES__manifest=%s snapshot=%s\n' "$FILES_MANIFEST_STATUS" "$FILES_SNA
 ''',
     ].join();
     final File harness = File('${temp.path}/publish.sh')..writeAsStringSync(harnessText);
-    final ProcessResult result = await Process.run('bash', <String>[harness.path]);
+    final Map<String, String> harnessEnvironment = <String, String>{
+      'WORKSPACE_PATH': workspace.path,
+      'DATA_PATH': data.path,
+      'TEST_TMP': temp.path,
+    };
+    final ProcessResult syntax = await Process.run('bash', <String>['-n', harness.path], environment: harnessEnvironment);
+    expect(syntax.exitCode, 0, reason: '${syntax.stderr}\n$harnessText');
+    final ProcessResult result = await Process.run('bash', <String>[harness.path], environment: harnessEnvironment);
     expect(result.exitCode, 0, reason: '${result.stderr} ${result.stdout}');
 
     final File published = File('${temp.path}/published/nova-craft/files/manifest.json');
@@ -240,7 +237,7 @@ printf '__FILES__manifest=%s snapshot=%s\n' "$FILES_MANIFEST_STATUS" "$FILES_SNA
     final ProcessResult publishFailure = await Process.run(
       'bash',
       <String>[harness.path],
-      environment: <String, String>{'PUT_FAIL': '1'},
+      environment: <String, String>{...harnessEnvironment, 'PUT_FAIL': '1'},
     );
     expect(publishFailure.exitCode, 0, reason: publishFailure.stderr);
     expect(publishFailure.stdout, contains('__FILES__manifest=publish_failed snapshot=publish_failed'));
@@ -252,7 +249,7 @@ printf '__FILES__manifest=%s snapshot=%s\n' "$FILES_MANIFEST_STATUS" "$FILES_SNA
     final ProcessResult generationFailure = await Process.run(
       'bash',
       <String>[harness.path],
-      environment: <String, String>{'DATA_ABS_OVERRIDE': invalidData.path},
+      environment: <String, String>{...harnessEnvironment, 'DATA_ABS_OVERRIDE': invalidData.path},
     );
     expect(generationFailure.exitCode, 0, reason: generationFailure.stderr);
     expect(generationFailure.stdout, contains('__FILES__manifest=generation_failed snapshot=generation_failed'));
