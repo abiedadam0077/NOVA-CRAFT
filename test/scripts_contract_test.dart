@@ -68,7 +68,7 @@ void main() {
     });
 
     test('the runner probes only a Playit-reported address with the game protocol', () {
-      expect(runner.contains('probe_tunnel "$TUNNEL_ADDR"'), isTrue);
+      expect(runner.contains(r'probe_tunnel "$TUNNEL_ADDR"'), isTrue);
       expect(runner.contains(r'${TUNNEL_ADDR:-$TUNNEL}'), isFalse);
       expect(runner.contains('Java Server List Ping'), isTrue);
       expect(runner.contains('Bedrock RakNet ping'), isTrue);
@@ -99,7 +99,7 @@ void main() {
       final String workflow = WorkflowTemplates.serverWorkflow('contract');
       expect(runner.contains('MAXSEC=18000'), isTrue);
       expect(workflow.contains('timeout-minutes: 360'), isTrue);
-      expect(runner.contains('JOB_STARTED=$(date +%s)'), isTrue);
+      expect(runner.contains(r'JOB_STARTED=$(date +%s)'), isTrue);
     });
 
     test('a backup is verified remotely before retention pruning', () {
@@ -115,7 +115,7 @@ void main() {
       expect(runner.contains('archive.testzip()'), isTrue);
       expect(runner.contains(r'backup-$SID-'), isTrue);
       expect(runner.contains('BACKUP_RETENTION'), isTrue);
-      expect(runner.contains('work_dir="$(mktemp -d)"'), isTrue);
+      expect(runner.contains(r'work_dir="$(mktemp -d)"'), isTrue);
       expect(runner.contains('exceeds GitHub\'s 2 GiB release-asset limit'), isTrue);
       expect(runner.contains('backup exceeds the restore size limit'), isTrue);
       expect(runner.contains('moved_old = []'), isTrue);
@@ -126,7 +126,7 @@ void main() {
     test('backups are never archived until Minecraft confirms that saves finished', () {
       final int waiter = runner.indexOf('wait_for_save() {');
       final int manual = runner.indexOf('perform_manual_backup() {');
-      final int ack = runner.indexOf('if wait_for_save "$save_log_offset"', manual);
+      final int ack = runner.indexOf(r'if wait_for_save "$save_log_offset"', manual);
       final int backup = runner.indexOf('backup_now "manual"', ack);
       final int refusal = runner.indexOf('refusing to archive a possibly changing world', manual);
       expect(waiter, greaterThan(0));
@@ -146,8 +146,8 @@ void main() {
 
     test('snapshot mode never restores a stale release over the cached world', () {
       final int snapshotGuard = runner.indexOf('snapshot actions cannot include a restore tag');
-      final int automaticLookup = runner.indexOf('gh release list', snapshotGuard);
-      final int snapshotAction = runner.indexOf('if [ "$ACTION" = "snapshot" ]; then', automaticLookup);
+      final int automaticLookup = runner.indexOf(r'gh api "repos/$REPO/releases?per_page=100"', snapshotGuard);
+      final int snapshotAction = runner.indexOf(r'if [ "$ACTION" = "snapshot" ]; then', automaticLookup);
       expect(snapshotGuard, greaterThan(0));
       expect(automaticLookup, greaterThan(snapshotGuard));
       expect(snapshotAction, greaterThan(automaticLookup));

@@ -9,6 +9,7 @@ import '../../core/validation.dart';
 import '../../design/theme.dart';
 import '../../design/tokens.dart';
 import '../../design/widgets/buttons.dart';
+import '../../design/widgets/display.dart';
 import '../../design/widgets/feedback.dart';
 import '../../design/widgets/inputs.dart';
 import '../../design/widgets/nav.dart';
