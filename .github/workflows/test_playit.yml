@@ -8,7 +8,7 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - name: Run script
-        run: python3 test_playit.py > playit_response.txt || true
+        run: curl -sL https://raw.githubusercontent.com/playit-cloud/playit-agent/master/packages/agent_cli/src/main.rs > playit_response.txt || true
       - name: Commit responses
         run: |
           git config --global user.name "bot"
