@@ -1,1 +1,2 @@
-404: Not Found
+CREATE ERR: HTTP Error 400: Bad Request
+ERR BODY: {"status":"fail","data":"InvalidCode"}
