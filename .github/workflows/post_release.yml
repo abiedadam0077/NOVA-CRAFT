@@ -20,8 +20,9 @@ jobs:
         run: |
           git config --global user.name "bot"
           git config --global user.email "bot@bot.com"
-          cp build/app/outputs/flutter-apk/app-release.apk nova-craft-final.apk
+          cp build/app/outputs/flutter-apk/app-release.apk nova-craft-final.apk || (find build -name "*.apk" && exit 1)
           sha256sum nova-craft-final.apk > final_sha256.txt
+          git pull --rebase origin ${{ github.ref }} || true
           git add nova-craft-final.apk final_sha256.txt
           git commit -m "Add final apk" || true
           git push origin ${{ github.ref }} || true
