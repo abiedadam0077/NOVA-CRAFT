@@ -53,17 +53,26 @@ Map<String, dynamic> _run({
       'head_sha': 'abc123',
     };
 
+class _TimeoutGitHubApi extends GitHubApi {
+  _TimeoutGitHubApi(http.Client client) : super(client: client);
+
+  @override
+  Future<String> getFileText(String owner, String repo, String path, {String? branch}) =>
+      Future<String>.error(const TimeoutException('mock request timed out'));
+}
+
 Future<AppState> _pumpFiles(
   WidgetTester tester,
   http.Client client, {
   String language = 'en',
   Duration timeout = const Duration(seconds: 1),
+  GitHubApi? apiOverride,
 }) async {
   final String previousLanguage = L10n.lang;
   L10n.lang = language;
   addTearDown(() => L10n.lang = previousLanguage);
   addTearDown(client.close);
-  final AppState state = AppState(api: GitHubApi(client: client, timeout: timeout));
+  final AppState state = AppState(api: apiOverride ?? GitHubApi(client: client, timeout: timeout));
   state.language = language;
   await tester.pumpWidget(
     NovaTheme(
@@ -351,9 +360,11 @@ void main() {
       addTearDown(networkState.dispose);
       expect(find.text('Could not connect to GitHub'), findsOneWidget);
 
+      final http.Client timeoutClient = MockClient((http.Request request) async => http.Response('{}', 200));
       final AppState timeoutState = await _pumpFiles(
         tester,
-        MockClient((http.Request request) async => throw TimeoutException('mock request timed out')),
+        timeoutClient,
+        apiOverride: _TimeoutGitHubApi(timeoutClient),
       );
       addTearDown(timeoutState.dispose);
       expect(find.text('The file request timed out'), findsOneWidget);

@@ -208,8 +208,8 @@ put_file() {
 }
 ''',
       publishFunction,
-      r'''
-publish_files
+      '\n',
+      r'''publish_files
 printf '__FILES__manifest=%s snapshot=%s\n' "$FILES_MANIFEST_STATUS" "$FILES_SNAPSHOT_STATUS"
 ''',
     ].join();
