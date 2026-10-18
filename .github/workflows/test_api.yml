@@ -3,6 +3,15 @@ on: push
 jobs:
   test:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
-      - run: curl -s https://fill.papermc.io/v3/projects/paper > paper.json && cat paper.json
-      - run: curl -s https://fill.papermc.io/v3/projects/paper/versions/1.20.4/builds > builds.json && cat builds.json || true
+      - uses: actions/checkout@v4
+      - run: |
+          curl -s https://fill.papermc.io/v3/projects/paper > paper.json
+          curl -s https://fill.papermc.io/v3/projects/paper/versions/1.20.4/builds > builds.json || true
+          git config user.name bot
+          git config user.email bot@bot.com
+          git add paper.json builds.json
+          git commit -m "API responses"
+          git push
