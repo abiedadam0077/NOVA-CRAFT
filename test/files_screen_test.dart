@@ -58,7 +58,7 @@ class _TimeoutGitHubApi extends GitHubApi {
 
   @override
   Future<String> getFileText(String owner, String repo, String path, {String? branch}) =>
-      Future<String>.error(const TimeoutException('mock request timed out'));
+      Future<String>.error(TimeoutException('mock request timed out'));
 }
 
 Future<AppState> _pumpFiles(
