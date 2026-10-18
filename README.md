@@ -10,11 +10,15 @@ NOVA CRAFT is a native Flutter/Dart Android app for provisioning and managing Mi
 
 ## Current build and verification
 
-The current implementation is being validated by `.github/workflows/flutter.yml`. That workflow runs static analysis and tests before building an APK, then checks its package/version, verifies its Android signature with `apksigner`, calculates SHA-256, uploads the evidence, publishes a GitHub prerelease, downloads the APK again, and checks the published bytes against the checksum.
+CI run [39116644482](https://github.com/abiedadam0077/NOVA-CRAFT/actions/runs/39116644482) completed successfully on commit `3281825403357854e90b946fe10d4c5530016baf`. `flutter analyze`, `flutter test`, the APK build, `aapt` package/version checks, `apksigner` verification, SHA-256 generation, release upload, and CI re-download/checksum verification all passed.
 
-No link in this section should be treated as a new verified build until the workflow has completed successfully. See [`docs/REBUILD_REPORT_FINAL.md`](docs/REBUILD_REPORT_FINAL.md) for the current run result, signing status, hash, download link and limitations. [All GitHub releases](https://github.com/abiedadam0077/NOVA-CRAFT/releases).
+- **Recommended arm64 direct download (25,093,613 bytes):** [NOVA-CRAFT-1.0.0-arm64-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39116644482-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk)
+  SHA-256: `5ab649d40224c155350784af8e370cd88a536ad47325db796312b85af7f68d0f`
+- **Universal direct download (60,853,801 bytes):** [NOVA-CRAFT-1.0.0-release-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39116644482-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk)
+  SHA-256: `3b3e20634e9d9fcbc364db12ac13f3f1e8fc408122397928996e1c3d8fdf02f2`
+- [Release page and verification reports](https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39116644482-1) · [SHA256SUMS.txt](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39116644482-1/SHA256SUMS.txt) · [apksigner report](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39116644482-1/signature-verification.txt)
 
-The repository has no committed production keystore. If the repository's `NOVA_KEYSTORE_BASE64` and `NOVA_KEYSTORE_PASSWORD` secrets are not configured, CI produces a release-mode APK signed with the CI debug key. Such an APK can be used for testing, but it is not a production signing identity and cannot update an installation signed by another key. CI does not generate or replace a release key.
+These are AOT release-mode APKs but **debug-signed**, not production-signed. The repository contains no production keystore. A debug-signed APK can be used for testing, but it cannot update an installation signed by another key. CI does not generate or replace a release key. The manually dispatched emulator smoke test was not run because the available GitHub integration returned HTTP 403 for workflow dispatch; see the final report for this and other limits.
 
 ## First run
 

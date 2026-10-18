@@ -1,56 +1,72 @@
-# NOVA CRAFT — تقرير إعادة البناء والتحقق (تحديث قبل CI)
+# NOVA CRAFT — تقرير التنفيذ والتحقق للإصدار المنشور
 
-**تاريخ الحالة:** 2026-10-18
-**الفرع:** `arena/9027d464-nova-craft`
-**مرجع التنفيذ:** `NOVA_CRAFT_MASTER_IMPLEMENTATION_BRIEF.md` من مستودع GitHub؛ SHA-1: `5093818629d00df7f041410f002b6bd1cf5ec0ee`.
-**التقرير:** هذه نسخة حالة دقيقة قبل تشغيل CI على التعديلات الحالية؛ سيُستبدل قسم APK بنتيجة CI ورابط/بصمة تنزيل عند توفرهما، ولن يُعرض أي APK غير مبني على أنه إصدار جديد.
+- **تاريخ التحقق:** 2026-10-18
+- **الفرع:** `arena/9027d464-nova-craft`
+- **الالتزام المبني:** `3281825403357854e90b946fe10d4c5530016baf`
+- **مرجع التنفيذ:** `NOVA_CRAFT_MASTER_IMPLEMENTATION_BRIEF.md` من مستودع GitHub، SHA-1 `5093818629d00df7f041410f002b6bd1cf5ec0ee`.
 
-## الخلاصة الحالية
+## الخلاصة
 
-اكتمل تنفيذ معظم مسارات التطبيق والـrunner المطلوبة داخل المستودع، مع الحفاظ على Flutter/Dart والميزات القائمة. أُصلح كذلك تقرير README القديم الذي كان يصف تدفق Claim آلياً وعنوان Playit/دورة تشغيل وAPK قديمة على نحو لا يطابق التنفيذ الحالي. شُغّل CI (`39110623631`) ووصل إلى `flutter analyze`، لكنه فشل بسبب استيراد واجهة ناقص وأخطاء interpolation في عقود الاختبار؛ أُصلحت، ثم نجح التحليل في run `39116457825`. شغّل هذا الـrun الاختبارات ومرّ معظمها، لكنه كشف توقعين قديمين في عقد الاختبار لا يطابقان اختيار backup الموثّق الجديد؛ صُحّحا في التغييرات الحالية، وجارٍ إعادة تشغيل CI. لم تصل المحاولات إلى بناء APK بعد، ولا يوجد APK جديد موثّق. Flutter/Dart وAndroid SDK و`apksigner` غير مثبتة محلياً.
+اكتمل تنفيذ مسارات الإعداد وGitHub وPlayit والنسخ والاستعادة والواجهة ضمن المستودع. نجح GitHub Actions في التحليل الساكن، والاختبارات، وبناء APK، وفحص الحزمة والتوقيع والبصمة، ورفع الملفات ثم تنزيل APK المنشور والتحقق منه مرة أخرى. أُنشئ إصدار تجريبي على GitHub بالوسم `flutter-apk-39116644482-1`.
 
-## التنفيذ
+- [تشغيل CI الناجح 39116644482](https://github.com/abiedadam0077/NOVA-CRAFT/actions/runs/39116644482)
+- [صفحة الإصدار وملفات التحقق](https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39116644482-1)
+- **تنزيل arm64 المباشر (موصى به لمعظم أجهزة Android الحديثة):** [NOVA-CRAFT-1.0.0-arm64-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39116644482-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk)
+- **تنزيل APK الشامل:** [NOVA-CRAFT-1.0.0-release-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39116644482-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk)
 
-- **التدقيق:** سجل الحالة السابقة والفجوات في [`PHASE-A-AUDIT-AR.md`](PHASE-A-AUDIT-AR.md)، بعد قراءة Master Brief ومراجعة GitHub Actions والكود.
-- **الإعداد وGitHub:** أُضيف اختيار مستودع يملكه التطبيق ويملك صلاحية الكتابة إليه قبل شاشة Playit، ومعالجة إنشاء مستودع وتثبيت GitHub App، والتحقق من كتابة GitHub Secret قبل اعتبارها محفوظة. أضيفت قراءة صفحات GitHub API المتعددة. تُزال مفاتيح Playit المحلية عند تسجيل الخروج العادي لمنع نقل السر بين حسابين.
-- **Playit:** أُزيلت مسارات Claim/إنشاء Tunnel من التطبيق. المستخدم ينشئ Tunnel يدوياً مرة واحدة؛ يتم فحص Agent عبر واجهة Playit الرسمية، واختيار Tunnel عند الالتباس، ثم يقرأ runner العنوان الحقيقي من Agent API ويعيد الفحص إذا لم يخصص العنوان بعد. أُضيف تخطي موثق لا يمنع إنشاء السيرفر، وعنوان يدوي موثّق، ولا تُعرض حالة اتصال ناجحة إلا بعد حالة تشغيل حقيقية وفحص بروتوكول اللعبة.
-- **الخادم وActions:** حدّ دورة التشغيل إلى 18,000 ثانية (خمس ساعات) ضمن مهلة GitHub Actions البالغة 360 دقيقة، مع الإيقاف/إعادة التشغيل المصرح بهما، واستمرار الدورة فقط عند تفعيلها. تُفحص مسارات `dataPath` النسبية الآمنة، والجذور المحمية، والروابط الرمزية قبل cache restore وفي runner.
-- **Backup/Restore:** ينتظر runner إقرار حفظ Java/Bedrock، وينشئ ZIP مؤقتاً، ويرفض الأرشيف الأكبر من 2 GiB، ثم يختبر ZIP وSHA-256 محلياً وبعد تنزيله من Release. لا يبدأ الاحتفاظ إلا بعد التحقق؛ الاختيار/الحذف الآليان يقتصران على Releases المعلّمة والمكتملة التابعة لهذا السيرفر. الاستعادة تتحقق من ملكية tag وSHA وCRC وقيود الحجم والمسار وتدعم التراجع عند الفشل. شاشة النسخ تعرض Releases الخاصة بهذا السيرفر التي تحتوي ZIP وchecksum، وتفتح أصل `world-backup.zip` الصحيح للتنزيل.
-- **الواجهة والأمان:** عُدّلت حالات العنوان/حالة النفق لتفصل بين العنوان المبلّغ من Playit والعنوان اليدوي، وعُرضت واجهة اختيار Tunnel دون تخمين بين أنفاق متعددة. أُضيف تعطيل أوامر الكونسول ورفض أوامر `nova:` المحجوزة، وفحص محارف التحكم والأوامر الخطرة. أُضيفت إعدادات الاحتفاظ بالنسخ.
-- **الترجمة:** العربية والإنجليزية متطابقتان في مفاتيح الترجمة، مع RTL/LTR.
-- **CI والتوثيق:** حُدّثت مسارات Flutter/Android smoke القديمة وحُذف workflow قديم ينشئ التزامات/بيانات غير لازمة. حُدّث README. لا يُعد تعديل ملفات Workflow بديلاً عن تشغيلها فعلياً.
+## ملفات APK والبصمات والتوقيع
+
+| الحزمة | الحجم المنشور | SHA-256 |
+|---|---:|---|
+| `NOVA-CRAFT-1.0.0-arm64-debugsigned.apk` | 25,093,613 بايت | `5ab649d40224c155350784af8e370cd88a536ad47325db796312b85af7f68d0f` |
+| `NOVA-CRAFT-1.0.0-release-debugsigned.apk` | 60,853,801 بايت | `3b3e20634e9d9fcbc364db12ac13f3f1e8fc408122397928996e1c3d8fdf02f2` |
+
+مصدر البصمتين هو حقل `digest` الرسمي لكل ملف في GitHub Release API، كما اجتاز الـworkflow خطوة إنشاء SHA-256 وفحص نسخة APK التي أعاد تنزيلها من الإصدار المنشور. أرفق الإصدار أيضاً [SHA256SUMS.txt](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39116644482-1/SHA256SUMS.txt) و[تقرير تحقق apksigner](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39116644482-1/signature-verification.txt). بيئة العمل الحالية تمنع الوصول إلى مضيف GitHub الخاص بملفات الإصدار؛ لذلك لم أتمكن من إعادة تنزيل الباينري من داخل هذه البيئة. تحقق workflow من الباينري المنشور نفسه بنجاح، ورابط التنزيل أعلاه هو رابط GitHub المباشر المسجل للأصل.
+
+**التوقيع:** نجح فحص `apksigner` في CI، لكن الملفين **موقّعان بمفتاح debug الخاص بالبناء** (`debugsigned`) وليسا موقّعين بمفتاح إنتاج. لا يوجد keystore إنتاجي ملتزم بالمستودع، ولم أتمكن من قراءة أسرار GitHub Actions (واجهت قراءة الأسرار HTTP 403)، لذلك لا أقدّم هذا الإصدار على أنه إصدار إنتاج. استخدامه للاختبار ممكن، لكنه لن يحدّث تثبيتاً سابقاً موقّعاً بمفتاح مختلف. لم يُنشأ مفتاح إنتاج أو يُخترع.
+
+بيانات الحزمة وفق تقرير الفحص المرفق: `io.github.abiedadam0077.novacraft`، الإصدار `1.0.0`، `minSdk 26` و`targetSdk 35` و`compileSdk 36`. رمز نسخة APK الخاص بـarm64 هو `2001`، والشامل `1` وفق تقرير `aapt` المنشور.
+
+## نتائج التحقق
+
+| الفحص | النتيجة |
+|---|---|
+| `flutter analyze` | نجح في تشغيل CI رقم `39116644482`. |
+| `flutter test` | نجحت مجموعة اختبارات الوحدة والواجهات في التشغيل نفسه. |
+| بناء Android APK | نجح؛ أُنشئت حزمة arm64 وحزمة شاملة. |
+| اسم الحزمة والإصدار/SDK | فُحصت بواسطة أدوات Android ضمن CI. |
+| توقيع APK | اجتاز `apksigner` التحقق؛ التوقيع debug وليس إنتاجياً. |
+| checksum ورفع الإصدار | نُشرت البصمات وتقارير الفحص، ثم أُعيد تنزيل APK وفُحصت البصمة بنجاح ضمن CI. |
+| `git diff --check` | اجتاز الفحص المحلي. |
+| `bash -n` و`python3 -m py_compile` | نجحت على runner وأدوات المساعدة المستخرجة في الفحوص المحلية السابقة. |
+| اختبار YAML وتهيئة workflow المولّد | نجح في الفحوص المحلية السابقة؛ وبنى CI التطبيق من القالب بنجاح. |
+| مفاتيح العربية والإنجليزية | 765 مفتاحاً متطابقاً، بلا مفاتيح ناقصة أو مكررة في الفحص المحلي السابق. |
+| محاكاة Playit والنسخ | نجحت الحالات الاصطناعية المسجلة أدناه؛ ليست اتصالات حية بخدمات خارجية. |
+
+كانت هناك محاولتان سابقتان فشلتا أثناء التحقق: الأولى كشفت أخطاء `flutter analyze`، والثانية كشفت توقعين قديمين في اختبارات عقود runner. أُصلحت الأخطاء، ونجحت المحاولة الثالثة المذكورة أعلاه من التحليل حتى النشر.
+
+لم تتوفر Flutter/Dart محلياً. كما فشلت محاولة إعادة تشغيل محلّل `tree-sitter-dart` محلياً بسبب غياب وحدة Python `tree_sitter`؛ لذا لا أعدّ ذلك فحصاً ناجحاً. نتيجة `flutter analyze` الناجحة مصدرها CI.
+
+## ما نُفّذ
+
+- **GitHub والإعداد:** إضافة اختيار مستودع يملكه المستخدم ويملك صلاحية الكتابة قبل إدخال سر Playit؛ دعم تهيئة المستودع وفحص نجاح حفظ GitHub Secret وقراءة صفحات API المتعددة. مسح سر Playit المحلي عند تسجيل الخروج.
+- **Playit:** إزالة Claim وإنشاء Tunnel آلياً. ينشئ المستخدم Tunnel يدوياً مرة واحدة؛ يجري التطبيق/runner فحصاً عبر واجهة Playit الرسمية لاختيار Tunnel الملتبس وقراءة عنوانه الحقيقي. يعيد runner الفحص عند عدم تخصيص العنوان بعد. يوجد تخطي موثق وعنوان يدوي واضح المصدر، ولا يُختلق عنوان أو اتصال ناجح.
+- **تشغيل الخادم:** دورة تشغيل مخططة لخمس ساعات (18,000 ثانية) ضمن مهلة GitHub Actions البالغة ست ساعات، مع خيارات restart/stop، واستمرار الدورة فقط عند تفعيلها. تُفحص مسارات البيانات والجذور المحمية والروابط الرمزية.
+- **Backup/Restore:** انتظار تأكيد حفظ Java/Bedrock قبل الأرشفة، حد ZIP مقداره 2 GiB، وفحص ZIP وchecksum. لا يُحتفظ بنسخة ولا تُوسم موثقة إلا بعد إعادة تنزيلها والتحقق منها. تُفلتر النسخ حسب الخادم؛ الاستعادة ترفض traversal وتتحقق من الهوية والبصمة وتدعم rollback. شاشة النسخ تتيح تنزيل أرشيف العالم للنسخة المحددة.
+- **الواجهة والأمان:** اختيار Tunnel عند وجود أكثر من نتيجة دون تخمين، فصل العنوان المبلّغ من Playit عن العنوان اليدوي، منع أوامر الكونسول المحجوزة عند تعطيلها، وتدقيق مدخلات ومسارات ملفات الخادم. أضيفت إعدادات retention بعدد النسخ.
+- **التوطين:** دعم العربية RTL والإنجليزية LTR مع تزامن مفاتيح الترجمة.
 
 ## الملفات المعدّلة
 
 - **التوثيق:** `README.md`, `docs/PHASE-A-AUDIT-AR.md`, `docs/REBUILD_REPORT_FINAL.md`.
 - **GitHub Actions:** `.github/workflows/flutter.yml`, `.github/workflows/android-smoke.yml`; حذف `.github/workflows/post_release.yml` و`.github/workflows/test_api.yml`.
-- **التطبيق وواجهات البيانات:** `lib/app.dart`, `lib/core/github_api.dart`, `lib/core/models.dart`, `lib/core/playit_api.dart`, `lib/core/provisioner.dart`, `lib/core/strings.dart`, `lib/core/validation.dart`, `lib/core/workflow_templates.dart`, `lib/state/app_state.dart`.
+- **منطق التطبيق:** `lib/app.dart`, `lib/core/github_api.dart`, `lib/core/models.dart`, `lib/core/playit_api.dart`, `lib/core/provisioner.dart`, `lib/core/strings.dart`, `lib/core/validation.dart`, `lib/core/workflow_templates.dart`, `lib/state/app_state.dart`.
 - **الشاشات:** `lib/features/backups/backups_screen.dart`, `lib/features/console/console_screen.dart`, `lib/features/network/network_screen.dart`, `lib/features/onboarding/playit_setup_screen.dart`, `lib/features/servers/create_server_screen.dart`, `lib/features/servers/repository_selection_screen.dart`, `lib/features/servers/server_detail_screen.dart`, `lib/features/settings/server_settings_screen.dart`.
 - **الاختبارات:** `test/github_api_test.dart`, `test/models_test.dart`, `test/playit_api_test.dart`, `test/runner_contract_test.dart`, `test/scripts_contract_test.dart`, `test/validation_test.dart`.
 
-## الفحوصات المنفّذة محلياً
+## القيود والخطوات المتبقية
 
-| الفحص | النتيجة |
-|---|---|
-| `git diff --check` | نجح بلا whitespace errors. |
-| محلّل `tree-sitter-dart` على ملفات Dart | نجح نحوياً؛ **ليس** بديلاً عن `dart analyze` أو compiler. |
-| `bash -n` على runner المستخرج | نجح. |
-| `python3 -m py_compile` على config/Playit/fileops والـhelpers المستخرجة | نجح. |
-| فحص YAML لـGitHub workflows والـworkflow المولّد | نجح. |
-| مفاتيح الترجمة | 765 مفتاحاً في كل لغة، بلا تكرار أو مفاتيح مفقودة بين اللغتين؛ 512 مرجعاً حرفياً في التطبيق موجود. |
-| تكامل config و`dataPath` | قبل المسار المتداخل الآمن؛ رفض traversal والجذور المحمية والـsymlink وحقن مخرجات GitHub والإعدادات الرقمية المخالفة. |
-| تكامل حارس مسار runner | قبل المسار الآمن؛ رفض المسارات المطلقة/المتجاوزة/المشوّهة والروابط الرمزية. |
-| محاكاة محلل Playit | تحققت حالات العنوان الحقيقي المبلّغ، اختلاف الإصدار، تعدد الأنفاق، العنوان غير المخصص، وفشل API؛ لا مسار إنشاء Tunnel. **ليست اتصالاً حياً بـPlayit.** |
-| محاكاة lifecycle النسخ/الاحتفاظ | أُنشئ ZIP وchecksum في mock GitHub، وأُعيد تنزيلهما والتحقق منهما ووُسم Release؛ اختير أحدث backup موثّق مكتمل، ولم يُحذف غير الموثّق أو الناقص أو العائد لسيرفر آخر. **ليست GitHub Release حقيقية.** |
-| `flutter analyze` و`flutter test` | نجح `flutter analyze` في CI run `39116457825`. اختبارات Flutter شغّلت 119 حالة (117 نجحت و2 فشلتا بسبب توقعين قديمين في العقود)؛ أُصلحت التوقعات، وينتظر التحقق بعد إعادة التشغيل. لم يُبنَ APK بعد. |
-
-## APK والتوقيع والتنزيل
-
-- **لا يوجد APK جديد موثّق في هذه الحالة السابقة لتشغيل CI.** لا يوجد رابط APK جديد أو SHA-256 جديد يمكن تقديمه الآن.
-- `android/app/key.properties` وkeystore إنتاجي غير موجودين في شجرة العمل. لا يمكن فحص الأسرار الحساسة عبر اتصال GitHub المتاح؛ لذلك ستحدد نتيجة workflow ما إذا كان البناء يستخدم توقيعاً مُعداً في CI أم توقيع debug.
-- APK سابق في المستودع SHA-256 له `9546392f57ed5bbd694e074cff6988abbf0f5d53d1da892fd2978e7e579b6d1d`، لكن توقيعه لم يُتحقق محلياً ولا يُقدّم كإصدار جديد.
-- بعد اكتمال CI سيُضاف هنا رابط تنزيل إصدار منشور، واسم/نوع التوقيع، ونتيجة `apksigner`، وSHA-256 الذي يُعاد فحصه من الـasset المنشور. لن تُقدّم نسخة debug-signed على أنها إصدار production.
-
-## القيود والاختبارات الخارجية المتبقية
-
-لم يُختبر OAuth/GitHub App فعلياً بحساب مستخدم، أو Playit Agent بمفتاح حقيقي، أو Tunnel متصل، أو خادم Minecraft/Bedrock حي، أو تنزيل/استعادة Release حقيقي. محاكاة الـrunner لا تثبت هذه الاتصالات. اختبار Android smoke ليس تلقائياً؛ يلزم تشغيله على Tag APK بعد نجاح بناء CI. هذه القيود لا تُخفى ولا تُسجل كنجاح.
+- **Android emulator smoke:** محاولة تشغيل `.github/workflows/android-smoke.yml` يدوياً رُفضت من GitHub بـHTTP 403 (`Resource not accessible by integration`). لذلك لم يُجرَ اختبار تثبيت/فتح التطبيق على محاكي؛ النشر وفحوص الحزمة والتوقيع في CI لا تعوّض ذلك.
+- **اتصالات حية:** لم يُختبر GitHub OAuth/App بحساب مستخدم، ولا Playit Agent بمفتاح فعلي أو Tunnel متصل، ولا خادم Minecraft/Bedrock حقيقي، ولا استعادة Release على خادم حي. الاختبارات الوهمية لا تثبت هذه الاتصالات.
+- **توقيع إنتاج:** يلزم أن يجهز مالك المستودع أسرار keystore الإنتاجية المناسبة قبل إصدار APK موقّع إنتاجياً. لم أقرأ أو أعدل أسراراً.
+- **إصدار المستخدم:** الرابط أعلاه لإصدار prerelease debug-signed موثق، وليس توقيع متجر/إنتاج. راجع تحذير التوقيع قبل التثبيت فوق نسخة موجودة.
