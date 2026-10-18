@@ -1,2 +1,2 @@
 CREATE ERR: HTTP Error 404: Not Found
-ERR BODY: {"status":"error","data":{"type":"path-not-found","message":{"path":"/v1/guests/create"}}}
+ERR BODY: {"status":"error","data":{"type":"path-not-found","message":{"path":"/v1/agents/routing/create_guest"}}}
