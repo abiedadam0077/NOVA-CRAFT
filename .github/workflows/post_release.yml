@@ -15,7 +15,7 @@ jobs:
         with:
           channel: 'stable'
       - run: flutter pub get
-      - run: flutter build apk --release
+      - run: flutter build apk --release --android-skip-build-dependency-validation
       - name: Commit APK
         run: |
           git config --global user.name "bot"
