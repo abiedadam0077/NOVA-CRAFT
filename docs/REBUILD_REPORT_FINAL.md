@@ -2,36 +2,36 @@
 
 **التاريخ:** 2026-10-18<br>
 **الفرع:** `arena/9027d464-nova-craft`<br>
-**التزام الكود الذي بُني:** `48b4866b6b027429589229d7c739830027b1f21e`<br>
-**GitHub Actions:** [التشغيل الناجح 39157739464](https://github.com/abiedadam0077/NOVA-CRAFT/actions/runs/39157739464)<br>
-**وسم الإصدار:** `flutter-apk-39157739464-1`<br>
+**التزام الكود الذي بُني:** `ee7cc0d6a69e4d7b7b518d71dc198adf8e623e3d`<br>
+**GitHub Actions:** [التشغيل الناجح 39167342497](https://github.com/abiedadam0077/NOVA-CRAFT/actions/runs/39167342497)<br>
+**وسم الإصدار:** `flutter-apk-39167342497-1`<br>
 **مرجع المتطلبات:** `NOVA_CRAFT_MASTER_IMPLEMENTATION_BRIEF.md` من المستودع، SHA-1 `5093818629d00df7f041410f002b6bd1cf5ec0ee`.
 
 ## الخلاصة
 
 أُصلح مسار الملفات من مصدر المشكلة: Runner يولّد Manifest فعلياً من مجلد بيانات السيرفر، ينشئ مجلد النشر عند غيابه، وينشره إلى GitHub Contents؛ قارئ التطبيق يتحقق من المخطط والطوابع الزمنية والأحجام والمسارات، ويعرض حالات Workflow/الصلاحيات/الشبكة بدلاً من إظهار قائمة أو اتصال وهمي. كذلك فُصلت حالات حفظ سر Playit عن بدء Agent وTunnel وفحص Minecraft، وأضيف مسار آمن لتحديث ملفات Runner للسيرفرات الأقدم.
 
-اجتاز الكود **`flutter analyze` ومجموعة `flutter test` كاملة** في CI، ثم بُني APK وفُحصت الحزمة والتوقيع والبصمات. رُفع الإصدار إلى GitHub وأعاد CI تنزيل APK المنشور وفحص SHA-256 بنجاح. هذا تحقق آلي موثق، لكنه **ليس اختبار اتصال حيّاً بـPlayit أو Minecraft ولا اختباراً على جهاز/محاكي Android**.
+اجتاز الكود **`flutter analyze` ومجموعة `flutter test` كاملة** في CI، ثم بُني APK جديد. بعد تشخيص أن الإصدار السابق لا يُظهر v1/JAR، عُدّل التوقيع والتحقق في CI؛ تقرير الإصدار الجديد يؤكد **v1=true وv2=true وv3=true** للحزمتين، كما نجح فحص الحزمة والمحاذاة وSHA-256 وإعادة تنزيل APK المنشور داخل CI. هذا تحقق آلي موثق، لكنه **ليس اختبار اتصال حيّاً بـPlayit أو Minecraft ولا اختبار تثبيت على جهاز/محاكي Android**.
 
 ## التنزيل المباشر للحزم
 
 ### arm64 — موصى به لمعظم أجهزة Android الحديثة
 
-[تنزيل مباشر: NOVA-CRAFT-1.0.0-arm64-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39157739464-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk)<br>
-الحجم: **25,355,922 بايت**<br>
-SHA-256: `d7df6aeb2dc53755bce9a0f6a3f55dfbc27afd5be4433d7f60222bbe908edd45`
+[تنزيل مباشر: NOVA-CRAFT-1.0.0-arm64-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39167342497-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk)<br>
+الحجم: **25,350,216 بايت**<br>
+SHA-256: `a2c2104bf518c52ab64f24ec116088156c8ca10891bd051aad3a152c10f91614`
 
 ### APK شامل
 
-[تنزيل مباشر: NOVA-CRAFT-1.0.0-release-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39157739464-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk)<br>
-الحجم: **61,525,713 بايت**<br>
-SHA-256: `81f652515e6b25bb8038766d4b157bb9f1ca3b2398276c12db38f570e3aa02f2`
+[تنزيل مباشر: NOVA-CRAFT-1.0.0-release-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39167342497-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk)<br>
+الحجم: **61,518,502 بايت**<br>
+SHA-256: `c7b26c07a20172b5fd4c41c7b372431549975d5b644f41a803cbfe06c3d4761f`
 
-[صفحة الإصدار وتقارير التحقق](https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39157739464-1) · [SHA256SUMS.txt](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39157739464-1/SHA256SUMS.txt) · [تقرير apksigner](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39157739464-1/signature-verification.txt)
+[صفحة الإصدار وتقارير التحقق](https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39167342497-1) · [SHA256SUMS.txt](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39167342497-1/SHA256SUMS.txt) · [تقرير apksigner](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39167342497-1/signature-verification.txt)
 
-GitHub Release API يعرض SHA-256 لكل APK في حقل `digest`، ونجح فحص SHA-256 بعد إعادة التنزيل داخل الـworkflow. مضيف تنزيل أصول GitHub غير متاح من بيئة التطوير نفسها، لذلك لم أزعم أنني نزّلت ملف APK محلياً؛ الرابط المباشر وحالة الأصل `uploaded` متحقق منهما من GitHub، والتحقق من محتوى التنزيل نفذه CI.
+نجح CI في إعادة تنزيل أصول الإصدار والتحقق من SHA-256. مضيف تنزيل أصول GitHub غير متاح مباشرة من بيئة التطوير، لذلك لم أزعم أن APK نُزّل محلياً؛ رابط الإصدار وتقرير التوقيع وملف checksum منشورة، ومرحلة CI نفسها أكدت تطابق checksum بعد إعادة التنزيل.
 
-**التوقيع:** اجتاز APK فحص `apksigner`، لكنه **debug-signed وليس موقّعاً بمفتاح إنتاج**. لا يوجد keystore إنتاجي متاح في المستودع/البيئة. APK مناسب للاختبار، لكنه لا يحدّث تثبيتاً سابقاً موقّعاً بمفتاح مختلف. لم يُنشأ مفتاح إنتاج بديل.
+**التوقيع:** يؤكد تقرير `apksigner` أن كلا الملفين **v1/JAR=true, v2=true, v3=true**، مع شهادة `CN=Android Debug`. يستخدم CI `--min-sdk-version 19` في أوامر التوقيع والتحقق لإظهار/فرض فحص v1 عند أن `minSdk` في التطبيق 26؛ هذا الخيار لا يغيّر `minSdk 26` في Manifest. البناء **debug-signed وليس موقّعاً بمفتاح إنتاج**: لا يوجد keystore إنتاجي متاح. يُنشئ CI مفتاح Debug مؤقتاً لهذا البناء غير الإنتاجي فقط. بسبب اختلاف المفتاح، قد يرفض Android التثبيت فوق APK سابق موقّع بشهادة أخرى؛ انسخ ما تحتاجه ثم أزل التطبيق السابق قبل التثبيت الجديد، مع العلم أن الإزالة تمحو بيانات التطبيق المحلية. لم يُنشأ مفتاح إنتاج بديل.
 
 ## ما نُفّذ
 
@@ -59,12 +59,12 @@ GitHub Release API يعرض SHA-256 لكل APK في حقل `digest`، ونجح �
 
 | المرحلة | النتيجة |
 |---|---|
-| `flutter analyze` على Flutter 3.35.7 | **نجح** في CI رقم 39157739464. |
+| `flutter analyze` على Flutter 3.35.7 | **نجح** في CI رقم 39167342497. |
 | `flutter test --reporter expanded` | **نجحت المجموعة كاملة** في التشغيل نفسه، بما فيها اختبارات Widget والملفات وManifest/Traversal وPlayit وRunner. |
-| بناء APK | **نجح**؛ أُنتجت حزمة arm64 وحزمة شاملة. |
+| بناء APK | **نجح**؛ أُنتجت حزمة arm64 وحزمة شاملة، وأُعيد توقيعهما كمخرجات Debug غير إنتاجية. |
 | فحص `aapt` | نجح: `io.github.abiedadam0077.novacraft`, الإصدار `1.0.0`، `minSdk 26`, `targetSdk 35`. |
-| فحص `apksigner` | نجح؛ المفتاح Debug كما هو موضح أعلاه. |
-| SHA-256 والنشر | أُنشئت checksums، رُفعت الأصول، ثم نزّل CI APK المنشور وفحص checksum بنجاح. |
+| فحص `apksigner` | نجح لكل APK: **v1/JAR=true, v2=true, v3=true**, باستخدام `--min-sdk-version 19` للتحقق من v1. |
+| المحاذاة وSHA-256 والنشر | `zipalign -c` نجح؛ أُنشئت checksums، رُفعت الأصول، ثم نزّل CI الملفات المنشورة وفحص SHA-256 بنجاح. |
 | محاكاة تنفيذية لـfileops وpublish_files | نجحت ضمن اختبارات CI؛ شملت ملفات ومجلدات متداخلة وتحديثاً وفشل النشر واحتواء المسارات. |
 | Playit وMinecraft | اجتازت عقود API/المخطط والمحاكاة واختبار Java Server List Ping محلياً؛ **ليس اتصالاً حياً بالخدمة**. |
 | فحوص مساعدة محلية | اجتاز `git diff --check` و`bash -n` و`python3 -m py_compile` لقوالب Runner ومساعداته، وفحص تزامن **869** مفتاح ترجمة ar/en. |
@@ -74,7 +74,7 @@ GitHub Release API يعرض SHA-256 لكل APK في حقل `digest`، ونجح �
 
 ## قائمة الملفات
 
-- **Workflows:** `.github/workflows/flutter.yml`, `.github/workflows/android-smoke.yml`. حُذف `.github/workflows/post_release.yml` الذي كان يحاول إيداع APK ودفعه إلى Git، و`.github/workflows/test_api.yml` الذي كان يضيف استجابات API إلى المستودع تلقائياً.
+- **Workflows والتوقيع:** `.github/workflows/flutter.yml`, `.github/workflows/android-smoke.yml`, `android/app/build.gradle.kts`. يوقّع Workflow ملف APK النهائي صراحةً بـv1/v2/v3 ويُفشل CI إن لم يتحقق v1 وv2؛ حُذف `.github/workflows/post_release.yml` الذي كان يحاول إيداع APK ودفعه إلى Git، و`.github/workflows/test_api.yml` الذي كان يضيف استجابات API إلى المستودع تلقائياً.
 - **التوثيق:** `README.md`, `docs/PHASE-A-AUDIT-AR.md`, `docs/PLAYIT-DIAGNOSTICS-AR.md`, `docs/REBUILD_REPORT_FINAL.md`.
 - **التطبيق والبيانات:** `lib/app.dart`, `lib/core/formatters.dart`, `lib/core/github_api.dart`, `lib/core/models.dart`, `lib/core/playit_api.dart`, `lib/core/provisioner.dart`, `lib/core/strings.dart`, `lib/core/validation.dart`, `lib/core/workflow_templates.dart`, `lib/design/widgets/feedback.dart`, `lib/state/app_state.dart`.
 - **الشاشات:** `lib/features/backups/backups_screen.dart`, `lib/features/console/console_screen.dart`, `lib/features/files/files_screen.dart`, `lib/features/network/network_screen.dart`, `lib/features/onboarding/playit_setup_screen.dart`, `lib/features/servers/create_server_screen.dart`, `lib/features/servers/repository_selection_screen.dart`, `lib/features/servers/server_detail_screen.dart`, `lib/features/settings/server_settings_screen.dart`.

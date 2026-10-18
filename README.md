@@ -10,15 +10,17 @@ NOVA CRAFT is a native Flutter/Dart Android app for provisioning and managing Mi
 
 ## Current build and verification
 
-CI run [39157739464](https://github.com/abiedadam0077/NOVA-CRAFT/actions/runs/39157739464) completed successfully on code commit `48b4866b6b027429589229d7c739830027b1f21e`. `flutter analyze`, the complete `flutter test` suite, APK build, `aapt` package/version checks, `apksigner` verification, SHA-256 generation, release upload, and CI re-download/checksum verification all passed.
+CI run [39167342497](https://github.com/abiedadam0077/NOVA-CRAFT/actions/runs/39167342497) completed successfully on commit `ee7cc0d6a69e4d7b7b518d71dc198adf8e623e3d`. `flutter analyze`, the complete `flutter test` suite, APK build, `aapt` package/version checks, signature-scheme verification, SHA-256 generation, release upload, and CI re-download/checksum verification all passed.
 
-- **Recommended arm64 direct download (25,355,922 bytes):** [NOVA-CRAFT-1.0.0-arm64-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39157739464-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk)
-  SHA-256: `d7df6aeb2dc53755bce9a0f6a3f55dfbc27afd5be4433d7f60222bbe908edd45`
-- **Universal direct download (61,525,713 bytes):** [NOVA-CRAFT-1.0.0-release-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39157739464-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk)
-  SHA-256: `81f652515e6b25bb8038766d4b157bb9f1ca3b2398276c12db38f570e3aa02f2`
-- [Release page and verification reports](https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39157739464-1) · [SHA256SUMS.txt](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39157739464-1/SHA256SUMS.txt) · [apksigner report](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39157739464-1/signature-verification.txt)
+- **Recommended arm64 direct download (25,350,216 bytes):** [NOVA-CRAFT-1.0.0-arm64-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39167342497-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk)<br>
+  SHA-256: `a2c2104bf518c52ab64f24ec116088156c8ca10891bd051aad3a152c10f91614`
+- **Universal direct download (61,518,502 bytes):** [NOVA-CRAFT-1.0.0-release-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39167342497-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk)<br>
+  SHA-256: `c7b26c07a20172b5fd4c41c7b372431549975d5b644f41a803cbfe06c3d4761f`
+- [Release page and verification reports](https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39167342497-1) · [SHA256SUMS.txt](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39167342497-1/SHA256SUMS.txt) · [apksigner report](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39167342497-1/signature-verification.txt)
 
-These are AOT release-mode APKs but **debug-signed**, not production-signed. The repository contains no production keystore. A debug-signed APK can be used for testing, but it cannot update an installation signed by another key. CI does not generate or replace a release key. The Android emulator smoke workflow was attempted for this release but GitHub returned HTTP 403 for workflow dispatch; therefore app installation/launch on an emulator is not verified.
+Both APKs now verify as **v1/JAR=true, v2=true, v3=true**. CI passes `--min-sdk-version 19` to `apksigner` so it explicitly checks/emits the legacy v1 scheme; the APK manifest still declares `minSdk 26`.
+
+These are AOT release-mode APKs but **debug-signed**, not production-signed. The repository has no production keystore; CI creates an ephemeral debug keystore only for this non-production build. Because that signing key is not a stable release key, Android may refuse to install this APK over an older build signed with another key. Back up anything needed, then uninstall the older app before installing this one; uninstalling removes local app data. The Android emulator smoke workflow was attempted previously but GitHub returned HTTP 403 for workflow dispatch, so installation/launch on a device or emulator is not verified.
 
 ## First run
 
