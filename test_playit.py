@@ -1,5 +1,5 @@
 import urllib.request, json
-req = urllib.request.Request("https://api.playit.gg/v1/agents/routing/create_guest", headers={"Content-Type": "application/json"}, data=b"{}", method="POST")
+req = urllib.request.Request("https://api.playit.gg/claim/setup", headers={"Content-Type": "application/json"}, data=b"{}", method="POST")
 try:
     with urllib.request.urlopen(req) as response:
         print("CREATE:", response.read().decode())
