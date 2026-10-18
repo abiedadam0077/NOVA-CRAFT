@@ -884,12 +884,13 @@ class _ServerFilesViewState extends State<ServerFilesView> {
                   crossAxisAlignment: CrossAxisAlignment.start,
                   children: <Widget>[
                     Text(L10n.t('navFiles'), style: NovaTextStyles.heading(22, p.text)),
-                    Text(
-                      manifest?.generatedAt == null
-                          ? (_problem == null ? L10n.t('filesWaitingForRun') : _issueTitle(_problem!))
-                          : L10n.f('filesSyncedAt', <String, String>{'time': Fmt.relative(manifest!.generatedAt)}),
-                      style: NovaTextStyles.caption(p.textDim),
-                    ),
+                    if (manifest?.generatedAt != null)
+                      Text(
+                        L10n.f('filesSyncedAt', <String, String>{'time': Fmt.relative(manifest!.generatedAt)}),
+                        style: NovaTextStyles.caption(p.textDim),
+                      )
+                    else if (_problem == null)
+                      Text(L10n.t('filesWaitingForRun'), style: NovaTextStyles.caption(p.textDim)),
                   ],
                 ),
               ),
@@ -983,7 +984,10 @@ class _ServerFilesViewState extends State<ServerFilesView> {
         const SizedBox(height: 8),
         Expanded(
           child: _loading
-              ? const Padding(padding: EdgeInsets.all(NovaSpace.page), child: SkeletonList(count: 6, cardHeight: 54))
+              ? ListView(
+                  padding: const EdgeInsets.all(NovaSpace.page),
+                  children: const <Widget>[SkeletonList(count: 6, cardHeight: 54)],
+                )
               : _problem != null && manifest == null
                   ? _issueWidget(_problem!)
                   : manifest == null

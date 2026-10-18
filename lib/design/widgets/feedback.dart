@@ -278,40 +278,61 @@ class SkeletonList extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = context.nova;
+    final bool compact = cardHeight < 88;
+    final double inset = cardHeight < 64 ? 8 : (compact ? 12 : 16);
+    final double avatarSize = (cardHeight - inset * 2).clamp(24.0, 42.0).toDouble();
     return Column(
       children: List<Widget>.generate(count, (int i) {
         return Container(
           margin: const EdgeInsets.only(bottom: 12),
           height: cardHeight,
-          padding: const EdgeInsets.all(16),
+          padding: EdgeInsets.all(inset),
           decoration: BoxDecoration(
             color: p.cardSoft,
             borderRadius: NovaRadii.rLg,
             border: Border.all(color: p.stroke),
           ),
-          child: Column(
-            crossAxisAlignment: CrossAxisAlignment.start,
-            children: <Widget>[
-              Row(
-                children: <Widget>[
-                  const Skeleton(height: 42, width: 42, radius: 12),
-                  const SizedBox(width: 12),
-                  Expanded(
-                    child: Column(
-                      crossAxisAlignment: CrossAxisAlignment.start,
-                      children: const <Widget>[
-                        Skeleton(height: 12, width: 140),
-                        SizedBox(height: 8),
-                        Skeleton(height: 10, width: 90),
+          child: compact
+              ? Row(
+                  children: <Widget>[
+                    Skeleton(height: avatarSize, width: avatarSize, radius: 10),
+                    const SizedBox(width: 12),
+                    const Expanded(
+                      child: Column(
+                        mainAxisAlignment: MainAxisAlignment.center,
+                        crossAxisAlignment: CrossAxisAlignment.start,
+                        children: <Widget>[
+                          Skeleton(height: 9, width: 140),
+                          SizedBox(height: 6),
+                          Skeleton(height: 7, width: 90),
+                        ],
+                      ),
+                    ),
+                  ],
+                )
+              : Column(
+                  crossAxisAlignment: CrossAxisAlignment.start,
+                  children: <Widget>[
+                    Row(
+                      children: <Widget>[
+                        const Skeleton(height: 42, width: 42, radius: 12),
+                        const SizedBox(width: 12),
+                        const Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              Skeleton(height: 12, width: 140),
+                              SizedBox(height: 8),
+                              Skeleton(height: 10, width: 90),
+                            ],
+                          ),
+                        ),
                       ],
                     ),
-                  ),
-                ],
-              ),
-              const Spacer(),
-              const Skeleton(height: 10, width: double.infinity),
-            ],
-          ),
+                    const Spacer(),
+                    const Skeleton(height: 10, width: double.infinity),
+                  ],
+                ),
         );
       }),
     );
@@ -343,7 +364,7 @@ class EmptyState extends StatelessWidget {
     final p = context.nova;
     return Center(
       child: Padding(
-        padding: EdgeInsets.symmetric(horizontal: 24, vertical: compact ? 24 : 40),
+        padding: EdgeInsets.symmetric(horizontal: 24, vertical: compact ? 20 : 40),
         child: Column(
           mainAxisSize: MainAxisSize.min,
           children: <Widget>[

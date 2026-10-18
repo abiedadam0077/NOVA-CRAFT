@@ -50,7 +50,7 @@ void main() {
       final int off = script.indexOf('send_cmd "save-off"');
       final int flush = script.indexOf('send_cmd "save-all flush"');
       final int backup = script.indexOf('if backup_now "cycle"');
-      final int stop = script.indexOf('send_cmd "stop"');
+      final int stop = script.indexOf('send_cmd "stop"', backup);
       expect(off, greaterThan(0));
       expect(flush, greaterThan(off));
       expect(backup, greaterThan(flush));
