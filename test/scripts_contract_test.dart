@@ -62,7 +62,7 @@ void main() {
     test('the official daemon receives the key by protected file, not argv or logs', () {
       expect(runner.contains('header = "Authorization: Agent-Key %s"'), isTrue);
       expect(runner.contains(r'--secret-path "$PLAYIT_SECRET_FILE" --platform-docker'), isTrue);
-      expect(runner.contains('chmod 600 "$PLAYIT_SECRET_FILE"'), isTrue);
+      expect(runner.contains(r'chmod 600 "$PLAYIT_SECRET_FILE"'), isTrue);
       expect(runner.contains('unset PLAYIT_SECRET_KEY'), isTrue);
       expect(runner.contains('::add-mask::%s'), isTrue);
       expect(runner.contains('safe_agent_log_tail'), isTrue);
@@ -74,10 +74,10 @@ void main() {
 
     test('the official Agent starts exactly once and connectivity is log-confirmed', () {
       expect(RegExp(r'--secret-path').allMatches(runner), hasLength(1));
-      expect(runner.contains('nohup "$WORKSPACE_ABS/playitd" --secret-path'), isTrue);
+      expect(runner.contains(r'nohup "$WORKSPACE_ABS/playitd" --secret-path'), isTrue);
       expect(runner.contains('--platform-docker'), isTrue);
       expect(runner.contains("grep -Fiq 'playit connected; tunnels loaded'"), isTrue);
-      expect(runner.contains('kill -0 "$PLAYIT_PID"'), isTrue);
+      expect(runner.contains(r'kill -0 "$PLAYIT_PID"'), isTrue);
       expect(runner.contains('PLAYIT_AGENT_CONNECTED:'), isTrue);
       expect(runner.contains('PLAYIT_AGENT_FAILED'), isTrue);
       expect(runner.contains('PLAYIT_AGENT_STILL_STARTING'), isTrue);

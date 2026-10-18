@@ -29,7 +29,7 @@ void main() {
     await input.writeAsString(jsonEncode(response));
     final ProcessResult result = await Process.run(
       'python3',
-      <String>['${parser.path}', 'parse', '${input.path}', '${output.path}', edition, tunnelId],
+      <String>[parser.path, 'parse', input.path, output.path, edition, tunnelId],
     );
     expect(result.exitCode, 0, reason: '${result.stderr}');
     return output.readAsString();
@@ -168,7 +168,7 @@ void main() {
       });
       final ProcessResult result = await Process.run(
         'python3',
-        <String>['${parser.path}', 'probe', '127.0.0.1:${server.port}', 'JAVA'],
+        <String>[parser.path, 'probe', '127.0.0.1:${server.port}', 'JAVA'],
       );
       await server.close();
       return result.exitCode;
