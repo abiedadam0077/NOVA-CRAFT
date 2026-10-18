@@ -76,6 +76,18 @@ class Provisioner {
     }
   }
 
+  /// Upgrades only NOVA CRAFT's generated workflow/helpers for an existing
+  /// server repository. It deliberately leaves server.json, game properties,
+  /// the world, backups and repository Secrets untouched.
+  static Future<void> updateRunnerFiles(GitHubApi api, ServerConfig c) async {
+    await _putText(api, c, configScriptPath, WorkflowTemplates.configScript, 'nova: update runner config bridge');
+    await _putText(api, c, fileOpsPath, WorkflowTemplates.fileOpsScript, 'nova: update runner file operations');
+    await _putText(api, c, playitScriptPath, WorkflowTemplates.playitScript, 'nova: update Playit diagnostics');
+    await _putText(api, c, runnerPath, WorkflowTemplates.runnerScript, 'nova: update server runner');
+    await _putText(api, c, '.github/workflows/$workflowFile', WorkflowTemplates.serverWorkflow(c.id), 'nova: update server workflow');
+    await _putText(api, c, '$commandsPath/.gitkeep', '', 'nova: update command queue');
+  }
+
   /// Writes settings without touching the EULA flag or the download pin.
   static Future<void> updateConfig(GitHubApi api, ServerConfig c) async {
     await _putText(api, c, configPath, const JsonEncoder.withIndent('  ').convert(c.toJson()), 'nova: update config');

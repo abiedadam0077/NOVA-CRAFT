@@ -151,7 +151,7 @@ class _ServerDetailScreenState extends State<ServerDetailScreen> {
           ),
         );
       case 7:
-        return _ServerSettingsTab(config: widget.config);
+        return _ServerSettingsTab(config: widget.config, activeRun: monitor.runActive);
       default:
         return _OverviewTab(config: widget.config, monitor: monitor, onOpenTab: (int i) => setState(() => _tab = i));
     }
@@ -531,9 +531,10 @@ class _OverviewTab extends StatelessWidget {
 }
 
 class _ServerSettingsTab extends StatefulWidget {
-  const _ServerSettingsTab({required this.config});
+  const _ServerSettingsTab({required this.config, required this.activeRun});
 
   final ServerConfig config;
+  final bool activeRun;
 
   @override
   State<_ServerSettingsTab> createState() => _ServerSettingsTabState();
@@ -558,7 +559,9 @@ class _ServerSettingsTabState extends State<_ServerSettingsTab> {
   bool _autoRestart = true;
   int _backupRetention = 10;
   bool _saving = false;
+  bool _updatingRunner = false;
   String? _error;
+  String? _runnerUpdateError;
 
   @override
   void initState() {
@@ -630,6 +633,44 @@ class _ServerSettingsTabState extends State<_ServerSettingsTab> {
       setState(() => _error = Fmt.error(error));
     } finally {
       if (mounted) setState(() => _saving = false);
+    }
+  }
+
+  Future<void> _updateRunnerFiles() async {
+    if (widget.activeRun || _updatingRunner) {
+      setState(() => _runnerUpdateError = L10n.t('runnerUpdateActive'));
+      return;
+    }
+    final bool confirmed = await showNovaConfirm(
+      context,
+      title: L10n.t('updateRunnerFiles'),
+      body: L10n.t('updateRunnerFilesBody'),
+      confirmLabel: L10n.t('updateRunnerFiles'),
+      icon: Icons.system_update_alt_rounded,
+    );
+    if (!confirmed || !mounted) return;
+    setState(() {
+      _updatingRunner = true;
+      _runnerUpdateError = null;
+    });
+    try {
+      final AppState state = AppScope.read(context);
+      final List<WorkflowRun> runs = await state.api.listRuns(
+        widget.config.repoOwner,
+        widget.config.repoName,
+        workflow: Provisioner.workflowFile,
+      );
+      if (runs.any((WorkflowRun run) => run.isActive)) {
+        throw ApiException(409, L10n.t('runnerUpdateActive'));
+      }
+      await Provisioner.updateRunnerFiles(state.api, widget.config);
+      if (!mounted) return;
+      showNovaToast(context, L10n.t('runnerUpdateComplete'), kind: ToastKind.success);
+    } catch (error) {
+      if (!mounted) return;
+      setState(() => _runnerUpdateError = Fmt.error(error));
+    } finally {
+      if (mounted) setState(() => _updatingRunner = false);
     }
   }
 
@@ -790,6 +831,33 @@ class _ServerSettingsTabState extends State<_ServerSettingsTab> {
         ),
         const SizedBox(height: 8),
         Text(L10n.t('serverConfigSub'), textAlign: TextAlign.center, style: NovaTextStyles.caption(p.textDim)),
+        const SizedBox(height: 20),
+        SectionCard(
+          title: L10n.t('runnerMaintenance'),
+          icon: Icons.system_update_alt_rounded,
+          child: Column(
+            crossAxisAlignment: CrossAxisAlignment.stretch,
+            children: <Widget>[
+              Text(L10n.t('runnerMaintenanceBody'), style: NovaTextStyles.small(p.textMuted)),
+              if (widget.activeRun) ...<Widget>[
+                const SizedBox(height: 8),
+                InfoBanner(body: L10n.t('runnerUpdateActive'), icon: Icons.sync_rounded, color: p.warning, dense: true),
+              ],
+              if (_runnerUpdateError != null) ...<Widget>[
+                const SizedBox(height: 8),
+                InlineError(message: _runnerUpdateError!, onRetry: _updateRunnerFiles),
+              ],
+              const SizedBox(height: 10),
+              NovaButton(
+                label: L10n.t('updateRunnerFiles'),
+                icon: Icons.system_update_alt_rounded,
+                variant: NovaButtonVariant.secondary,
+                loading: _updatingRunner,
+                onPressed: _updatingRunner || widget.activeRun ? null : _updateRunnerFiles,
+              ),
+            ],
+          ),
+        ),
         const SizedBox(height: 20),
         SectionHeader(title: L10n.t('managePlayers'), subtitle: L10n.t('playersHint'), icon: Icons.groups_rounded),
         SectionCard(

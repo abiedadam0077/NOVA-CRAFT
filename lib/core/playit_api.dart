@@ -115,11 +115,11 @@ class PlayitAgentState {
 
 /// Reads Playit agent state with the agent secret.
 ///
-/// This uses the same public agent endpoint the official Playit agent and the
-/// official Minecraft plugin call (`POST https://api.playit.gg/v1/agents/rundata`
-/// with `Authorization: Agent-Key <secret>`). The secret is only sent to
-/// Playit, never logged, and never stored outside the device keystore or the
-/// repository's Actions secret.
+/// This mirrors the versioned `v1_agents_rundata` call in Playit's official
+/// Agent source (`POST https://api.playit.gg/v1/agents/rundata` with
+/// `Authorization: Agent-Key <secret>`). The secret is only sent to Playit,
+/// never logged, and never stored outside the device keystore or repository
+/// Actions secret. Tunnel creation is intentionally not part of this client.
 class PlayitApi {
   PlayitApi({http.Client? client}) : _client = client ?? http.Client();
 
@@ -135,26 +135,36 @@ class PlayitApi {
     if (key.isEmpty) return const PlayitAgentState.unknown('missing-secret');
     try {
       final Map<String, dynamic> data = await _rundata(key);
-      if (data.isEmpty) return const PlayitAgentState.unknown('unexpected-response');
-      final String agentId = (data['agent_id'] ?? '').toString();
-      final List<PlayitTunnel> tunnels = _tunnels(data);
+      final dynamic rawAgentId = data['agent_id'];
+      final dynamic rawTunnels = data['tunnels'];
+      if (rawAgentId is! String || rawAgentId.isEmpty || rawTunnels is! List) {
+        throw const _PlayitFailure('invalid-rundata-schema');
+      }
+      final String agentId = rawAgentId;
+      final List<PlayitTunnel> tunnels = _tunnels(rawTunnels);
       // Reading rundata is the only side effect of this operation. Tunnel
       // creation is always a user action in the Playit dashboard.
       return PlayitAgentState(agentId: agentId, tunnels: tunnels);
     } on _PlayitFailure catch (error) {
-      return PlayitAgentState.unknown(error.message);
+      return PlayitAgentState.unknown(_redact(error.message, key));
     } catch (error) {
-      return PlayitAgentState.unknown(_safeMessage(error));
+      return PlayitAgentState.unknown(_safeMessage(error, key));
     }
   }
 
-  List<PlayitTunnel> _tunnels(Map<String, dynamic> data) {
+  List<PlayitTunnel> _tunnels(List<dynamic> raw) {
     final List<PlayitTunnel> out = <PlayitTunnel>[];
-    final dynamic raw = data['tunnels'];
-    if (raw is List) {
-      for (final dynamic item in raw) {
-        if (item is Map) out.add(PlayitTunnel.fromJson(Map<String, dynamic>.from(item)));
+    for (final dynamic item in raw) {
+      if (item is! Map) throw const _PlayitFailure('invalid-rundata-tunnel');
+      final Map<String, dynamic> tunnel = Map<String, dynamic>.from(item);
+      final dynamic id = tunnel['id'] ?? tunnel['tunnel_id'];
+      final dynamic name = tunnel['name'];
+      final dynamic portType = tunnel['port_type'];
+      final dynamic displayAddress = tunnel['display_address'];
+      if (id is! String || id.isEmpty || name is! String || portType is! String || displayAddress is! String) {
+        throw const _PlayitFailure('invalid-rundata-tunnel');
       }
+      out.add(PlayitTunnel.fromJson(tunnel));
     }
     return out;
   }
@@ -208,12 +218,17 @@ class PlayitApi {
     return map;
   }
 
-  static String _safeMessage(Object error) {
+  static String _safeMessage(Object error, String secret) {
     final String text = error.toString();
     // Never let a URL with credentials or a stack trace reach the UI.
     if (text.contains('SocketException') || text.contains('ClientException')) return 'network-error';
     if (text.contains('TimeoutException')) return 'timeout';
-    return text.length > 160 ? '${text.substring(0, 160)}…' : text;
+    return _redact(text, secret);
+  }
+
+  static String _redact(String text, String secret) {
+    final String safe = secret.isEmpty ? text : text.replaceAll(secret, '[REDACTED]');
+    return safe.length > 160 ? '${safe.substring(0, 160)}…' : safe;
   }
 
 

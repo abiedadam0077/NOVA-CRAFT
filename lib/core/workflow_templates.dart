@@ -250,22 +250,28 @@ PLAYIT_CURL_CONFIG=""
 PLAYIT_TEMP_DIR=""
 PLAYIT_AGENT_STATUS="not_started"
 PLAYIT_AGENT_DIAGNOSTIC="agent_not_started"
+PLAYIT_AGENT_EXIT_CODE="not_started"
+PLAYIT_AGENT_EXIT_CAPTURED=false
 PLAYIT_SECRET_STATUS="missing"
 SERVER_PORT_STATUS="unknown"
+TUNNEL_DIAGNOSTIC="not_started"
+FILES_MANIFEST_STATUS="unknown"
+FILES_SNAPSHOT_STATUS="unknown"
 TUNNEL_LOCAL_IP=""
 TUNNEL_LOCAL_PORT=""
 GAME_PORT=25565
 [ "$EDITION" = "BEDROCK" ] && GAME_PORT=19132
 SRV_PID=""
+export PLAYIT_AGENT_EXIT_CODE TUNNEL_DIAGNOSTIC FILES_MANIFEST_STATUS FILES_SNAPSHOT_STATUS
 
 cleanup_playit() {
   if [ -n "$PLAYIT_PID" ] && kill -0 "$PLAYIT_PID" 2>/dev/null; then
     kill "$PLAYIT_PID" 2>/dev/null || true
+    wait "$PLAYIT_PID" 2>/dev/null || true
   fi
-  [ -n "$PLAYIT_SECRET_FILE" ] && rm -f "$PLAYIT_SECRET_FILE"
-  [ -n "$PLAYIT_CURL_CONFIG" ] && rm -f "$PLAYIT_CURL_CONFIG"
-  [ -n "$PLAYIT_LOG_PATH" ] && rm -f "$PLAYIT_LOG_PATH"
-  [ -n "$PLAYIT_TEMP_DIR" ] && rmdir "$PLAYIT_TEMP_DIR" 2>/dev/null || true
+  if [ -n "$PLAYIT_TEMP_DIR" ]; then
+    rm -rf -- "$PLAYIT_TEMP_DIR"
+  fi
 }
 trap cleanup_playit EXIT
 
@@ -337,11 +343,15 @@ if sha and sha != "null":
     body["sha"] = sha
 print(json.dumps(body))
 PYJSON
-  if ! gh api -X PUT "repos/$REPO/contents/$path" --input "$payload" > /dev/null 2>&1; then
-    log "WARN could not publish $path"
-    rm -f "$payload"
+  local api_error detail
+  api_error="$(mktemp)"
+  if ! gh api -X PUT "repos/$REPO/contents/$path" --input "$payload" > /dev/null 2>"$api_error"; then
+    detail="$(tail -n 3 "$api_error" 2>/dev/null | tr '\n' ' ' | sed -E 's/(Authorization:[[:space:]]*Bearer[[:space:]]+)[^[:space:]]+/\1[REDACTED]/Ig; s/(Agent-Key[[:space:]]+)[^[:space:]]+/\1[REDACTED]/Ig; s/[[:xdigit:]]{32,}/[REDACTED]/g' | cut -c1-240)"
+    log "WARN GitHub API could not publish $path${detail:+: $detail}"
+    rm -f "$api_error" "$payload"
     return 1
   fi
+  rm -f "$api_error"
   rm -f "$payload"
   return 0
 }
@@ -350,7 +360,7 @@ publish_status() {
   local phase="$1" ready="$2" reason="${3:-}" players="${4:-}" pmax="${5:-}" tunnel="${6:-unknown}" tunnel_msg="${7:-}" latency="${8:-}"
   local json
   json="$(python3 - "$phase" "$ready" "$reason" "$players" "$pmax" "$tunnel" "$tunnel_msg" "$latency" "$SRV_PID" "$MCV" "$JOB_STARTED" <<'PY'
-import json, os, sys, time
+import json, os, re, sys, time
 phase, ready, reason, players, pmax, tunnel, tmsg, latency, pid, mcv, started = sys.argv[1:12]
 def num(v):
     try:
@@ -377,6 +387,8 @@ def safe_agent_log_tail():
             secret = ""
     if secret:
         text = text.replace(secret, "[REDACTED]")
+    text = re.sub(r"(?i)(authorization:\s*agent-key\s+)[^\s\"']+", r"\1[REDACTED]", text)
+    text = re.sub(r"(?i)(secret(?:_key)?\s*[:=]\s*)[\"']?[0-9a-f]{16,}[\"']?", r"\1[REDACTED]", text)
     return text
 print(json.dumps({
     "schema": 2,
@@ -390,6 +402,7 @@ print(json.dumps({
     "serverPid": num(pid),
     "tunnelStatus": tunnel,
     "tunnelMessage": tmsg,
+    "tunnelDiagnostic": os.environ.get("TUNNEL_DIAGNOSTIC", ""),
     "tunnelAddress": os.environ.get("TUNNEL_ADDR", ""),
     "tunnelName": os.environ.get("TUNNEL_NAME", ""),
     "tunnelId": os.environ.get("TUNNEL_ID", ""),
@@ -400,10 +413,13 @@ print(json.dumps({
     "agentId": os.environ.get("AGENT_ID", ""),
     "agentStatus": os.environ.get("PLAYIT_AGENT_STATUS", "unknown"),
     "agentDiagnostic": os.environ.get("PLAYIT_AGENT_DIAGNOSTIC", ""),
+    "agentExitCode": os.environ.get("PLAYIT_AGENT_EXIT_CODE", "not_started"),
     "playitSecretStatus": os.environ.get("PLAYIT_SECRET_STATUS", "unknown"),
     "serverPortStatus": os.environ.get("SERVER_PORT_STATUS", "unknown"),
     "gamePort": num(os.environ.get("GAME_PORT", "")),
     "agentLogTail": safe_agent_log_tail(),
+    "fileManifestStatus": os.environ.get("FILES_MANIFEST_STATUS", "unknown"),
+    "fileSnapshotStatus": os.environ.get("FILES_SNAPSHOT_STATUS", "unknown"),
     "latencyMs": num(latency),
     "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     "cycleStartedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(started))),
@@ -429,15 +445,47 @@ publish_live() {
 }
 
 publish_files() {
-  # A structured file manifest plus a bounded snapshot of editable text files.
-  python3 "$WORKSPACE_ABS/nova-craft/fileops.py" manifest "$DATA_ABS" "$WORKSPACE_ABS/nova-craft/files/manifest.json" > /dev/null 2>&1 || true
-  if [ -f "$WORKSPACE_ABS/nova-craft/files/manifest.json" ]; then
-    put_file "nova-craft/files/manifest.json" "$(cat "$WORKSPACE_ABS/nova-craft/files/manifest.json")" "nova: file manifest" || true
+  # The manifest and snapshot are GitHub repository files. The server data used
+  # to generate them lives only on this runner while the Actions job is active.
+  local files_dir="$WORKSPACE_ABS/nova-craft/files"
+  local manifest_path="$files_dir/manifest.json"
+  local snapshot_path="$WORKSPACE_ABS/nova-craft/snapshot.json"
+  local error_file="$(mktemp)"
+  FILES_MANIFEST_STATUS=generation_failed
+  FILES_SNAPSHOT_STATUS=generation_failed
+  mkdir -p -- "$files_dir" || {
+    log "WARN could not create the manifest output directory"
+    rm -f "$error_file"
+    return 0
+  }
+
+  if python3 "$WORKSPACE_ABS/nova-craft/fileops.py" manifest "$DATA_ABS" "$manifest_path" > /dev/null 2>"$error_file"; then
+    if put_file "nova-craft/files/manifest.json" "$(cat "$manifest_path")" "nova: file manifest"; then
+      FILES_MANIFEST_STATUS=published
+    else
+      FILES_MANIFEST_STATUS=publish_failed
+      log "WARN generated file manifest could not be published to GitHub Contents"
+    fi
+  else
+    local detail
+    detail="$(tail -n 4 "$error_file" 2>/dev/null | tr '\n' ' ' | cut -c1-320)"
+    log "WARN manifest generation failed${detail:+: $detail}"
   fi
-  python3 "$WORKSPACE_ABS/nova-craft/fileops.py" snapshot "$DATA_ABS" "$WORKSPACE_ABS/nova-craft/snapshot.json" > /dev/null 2>&1 || true
-  if [ -f "$WORKSPACE_ABS/nova-craft/snapshot.json" ]; then
-    put_file "nova-craft/snapshot.json" "$(cat "$WORKSPACE_ABS/nova-craft/snapshot.json")" "nova: config snapshot" || true
+
+  : > "$error_file"
+  if python3 "$WORKSPACE_ABS/nova-craft/fileops.py" snapshot "$DATA_ABS" "$snapshot_path" > /dev/null 2>"$error_file"; then
+    if put_file "nova-craft/snapshot.json" "$(cat "$snapshot_path")" "nova: config snapshot"; then
+      FILES_SNAPSHOT_STATUS=published
+    else
+      FILES_SNAPSHOT_STATUS=publish_failed
+      log "WARN generated editable snapshot could not be published to GitHub Contents"
+    fi
+  else
+    local detail
+    detail="$(tail -n 4 "$error_file" 2>/dev/null | tr '\n' ' ' | cut -c1-320)"
+    log "WARN config snapshot generation failed${detail:+: $detail}"
   fi
+  rm -f "$error_file"
 }
 
 # File operations requested from the app. Applied immediately while a cycle is
@@ -468,7 +516,7 @@ publish_cycle_end() {
   local conclusion="$1" reason="$2"
   local json
   json="$(python3 - "$conclusion" "$reason" "$MCV" "$JOB_STARTED" <<'PY'
-import json, os, sys, time
+import json, os, re, sys, time
 conclusion, reason, mcv, started = sys.argv[1:5]
 def safe_agent_log_tail():
     path = os.environ.get("PLAYIT_LOG_PATH", "")
@@ -488,7 +536,11 @@ def safe_agent_log_tail():
                 secret = secret_handle.read()
         except OSError:
             secret = ""
-    return text.replace(secret, "[REDACTED]") if secret else text
+    if secret:
+        text = text.replace(secret, "[REDACTED]")
+    text = re.sub(r"(?i)(authorization:\s*agent-key\s+)[^\s\"']+", r"\1[REDACTED]", text)
+    text = re.sub(r"(?i)(secret(?:_key)?\s*[:=]\s*)[\"']?[0-9a-f]{16,}[\"']?", r"\1[REDACTED]", text)
+    return text
 print(json.dumps({
     "schema": 2,
     "serverId": json.load(open("nova-craft/server.json"))["id"],
@@ -499,6 +551,7 @@ print(json.dumps({
     "version": mcv,
     "tunnelStatus": os.environ.get("TUNNEL_STATE", "unknown"),
     "tunnelMessage": os.environ.get("TUNNEL_MSG", ""),
+    "tunnelDiagnostic": os.environ.get("TUNNEL_DIAGNOSTIC", ""),
     "tunnelAddress": os.environ.get("TUNNEL_ADDR", ""),
     "tunnelName": os.environ.get("TUNNEL_NAME", ""),
     "tunnelId": os.environ.get("TUNNEL_ID", ""),
@@ -508,10 +561,13 @@ print(json.dumps({
     "agentId": os.environ.get("AGENT_ID", ""),
     "agentStatus": os.environ.get("PLAYIT_AGENT_STATUS", "unknown"),
     "agentDiagnostic": os.environ.get("PLAYIT_AGENT_DIAGNOSTIC", ""),
+    "agentExitCode": os.environ.get("PLAYIT_AGENT_EXIT_CODE", "not_started"),
     "playitSecretStatus": os.environ.get("PLAYIT_SECRET_STATUS", "unknown"),
     "serverPortStatus": os.environ.get("SERVER_PORT_STATUS", "unknown"),
     "gamePort": int(os.environ.get("GAME_PORT", "0") or 0) or None,
     "agentLogTail": safe_agent_log_tail(),
+    "fileManifestStatus": os.environ.get("FILES_MANIFEST_STATUS", "unknown"),
+    "fileSnapshotStatus": os.environ.get("FILES_SNAPSHOT_STATUS", "unknown"),
     "updatedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime()),
     "cycleStartedAt": time.strftime("%Y-%m-%dT%H:%M:%SZ", time.gmtime(float(started))),
 }, ensure_ascii=False, indent=2))
@@ -1047,64 +1103,134 @@ cd "$WORKSPACE_ABS" || exit 1
 # ------------------------------------------------------------ Playit agent --
 
 playit_api() {
-  local endpoint="$1" payload="$2"
+  local endpoint="$1" payload="$2" error_path="$PLAYIT_TEMP_DIR/api.err"
   PLAYIT_API_HTTP_STATUS=""
+  PLAYIT_API_EXIT_CODE=0
+  PLAYIT_API_ERROR=""
   if PLAYIT_API_HTTP_STATUS="$(curl -sS --connect-timeout 10 --max-time 25 \
       --config "$PLAYIT_CURL_CONFIG" -X POST "https://api.playit.gg$endpoint" \
       -H "Content-Type: application/json" -d "$payload" \
-      -o /tmp/nova-rundata.json -w '%{http_code}' 2>/tmp/nova-playit-api.err)"; then
+      -o "$PLAYIT_TEMP_DIR/rundata.json" -w '%{http_code}' 2>"$error_path")"; then
     return 0
+  else
+    PLAYIT_API_EXIT_CODE=$?
   fi
+  PLAYIT_API_ERROR="$(python3 - "$error_path" "$PLAYIT_SECRET_FILE" <<'PYAPIERR'
+import re, sys
+try:
+    text = open(sys.argv[1], encoding="utf-8", errors="replace").read()[-1200:].replace("\n", " ").replace("\r", " ").strip()
+except OSError:
+    text = ""
+try:
+    secret = open(sys.argv[2], encoding="utf-8").read()
+except OSError:
+    secret = ""
+if secret:
+    text = text.replace(secret, "[REDACTED]")
+text = re.sub(r"(?i)(authorization:\s*agent-key\s+)[^\s\"']+", r"\1[REDACTED]", text)
+print(text[:320])
+PYAPIERR
+  )"
+  log "PLAYIT_API_TRANSPORT_ERROR exit=$PLAYIT_API_EXIT_CODE${PLAYIT_API_ERROR:+ detail=$PLAYIT_API_ERROR}"
   return 1
 }
 
 refresh_tunnel() {
-  rm -f /tmp/nova-rundata.json /tmp/nova-tunnel.env
+  rm -f "$PLAYIT_TEMP_DIR/rundata.json" "$PLAYIT_TEMP_DIR/tunnel.env"
   if ! playit_api /v1/agents/rundata '{}'; then
     TUNNEL_STATE=error
-    TUNNEL_MSG="The Playit rundata request did not complete."
+    TUNNEL_DIAGNOSTIC=rundata_network_error
+    TUNNEL_MSG="Playit rundata transport failed (curl exit $PLAYIT_API_EXIT_CODE)${PLAYIT_API_ERROR:+: $PLAYIT_API_ERROR}"
     return 1
   fi
   case "$PLAYIT_API_HTTP_STATUS" in
     2??) ;;
-    401|403)
-      PLAYIT_AGENT_STATUS=failed
-      PLAYIT_AGENT_DIAGNOSTIC=invalid_secret
+    401)
       TUNNEL_STATE=error
-      TUNNEL_MSG="Playit rejected the Agent key while reading rundata."
+      TUNNEL_DIAGNOSTIC=rundata_unauthorized
+      TUNNEL_MSG="Playit rundata rejected the Agent key (HTTP 401)."
+      playit_agent_failure invalid_secret "$TUNNEL_MSG" rundata_unauthorized
+      return 1
+      ;;
+    403)
+      TUNNEL_STATE=error
+      TUNNEL_DIAGNOSTIC=rundata_forbidden
+      TUNNEL_MSG="Playit rundata returned HTTP 403 (forbidden); this is not enough to identify the key as invalid."
       return 1
       ;;
     *)
       TUNNEL_STATE=error
+      TUNNEL_DIAGNOSTIC=rundata_http_error
       TUNNEL_MSG="Playit rundata returned HTTP ${PLAYIT_API_HTTP_STATUS:-unknown}."
+      log "PLAYIT_API_HTTP_ERROR status=${PLAYIT_API_HTTP_STATUS:-unknown}"
       return 1
       ;;
   esac
-  [ -s /tmp/nova-rundata.json ] || { TUNNEL_STATE=error; TUNNEL_MSG="Playit returned an empty rundata response."; return 1; }
-  python3 nova-craft/playit.py parse /tmp/nova-rundata.json /tmp/nova-tunnel.env "$EDITION" "$PLAYIT_TUNNEL_ID" > /dev/null || {
+  [ -s "$PLAYIT_TEMP_DIR/rundata.json" ] || {
     TUNNEL_STATE=error
-    TUNNEL_MSG="The Playit rundata response could not be parsed."
+    TUNNEL_DIAGNOSTIC=rundata_empty
+    TUNNEL_MSG="Playit returned HTTP ${PLAYIT_API_HTTP_STATUS:-2xx} with an empty rundata body."
     return 1
   }
-  . /tmp/nova-tunnel.env
+  python3 nova-craft/playit.py parse "$PLAYIT_TEMP_DIR/rundata.json" "$PLAYIT_TEMP_DIR/tunnel.env" "$EDITION" "$PLAYIT_TUNNEL_ID" > /dev/null || {
+    TUNNEL_STATE=error
+    TUNNEL_DIAGNOSTIC=rundata_parse_error
+    TUNNEL_MSG="The successful Playit rundata response could not be parsed as Tunnel data."
+    return 1
+  }
+  . "$PLAYIT_TEMP_DIR/tunnel.env"
+  TUNNEL_DIAGNOSTIC="${TUNNEL_DIAGNOSTIC:-$TUNNEL_STATE}"
   TUNNEL_MSG="${TUNNEL_Q_MSG:-}"
   return 0
 }
 
+record_playit_agent_exit() {
+  [ -n "$PLAYIT_PID" ] || return 0
+  [ "$PLAYIT_AGENT_EXIT_CAPTURED" = "true" ] && return 0
+  local exit_code
+  if wait "$PLAYIT_PID"; then exit_code=0; else exit_code=$?; fi
+  PLAYIT_AGENT_EXIT_CODE="$exit_code"
+  PLAYIT_AGENT_EXIT_CAPTURED=true
+}
+
+stop_failed_playit_agent() {
+  [ -n "$PLAYIT_PID" ] || return 0
+  if kill -0 "$PLAYIT_PID" 2>/dev/null; then
+    kill -TERM "$PLAYIT_PID" 2>/dev/null || true
+    for _ in $(seq 1 5); do
+      kill -0 "$PLAYIT_PID" 2>/dev/null || break
+      sleep 1
+    done
+    kill -KILL "$PLAYIT_PID" 2>/dev/null || true
+  fi
+  if [ "$PLAYIT_AGENT_EXIT_CAPTURED" != "true" ]; then
+    wait "$PLAYIT_PID" 2>/dev/null || true
+    PLAYIT_AGENT_EXIT_CAPTURED=true
+  fi
+  PLAYIT_AGENT_EXIT_CODE=stopped_after_failure
+}
+
 playit_agent_failure() {
-  local diagnostic="$1" message="$2"
+  local diagnostic="$1" message="$2" tunnel_diagnostic="${3:-agent_$1}"
+  if [ "$diagnostic" = "process_exited" ]; then
+    record_playit_agent_exit
+  else
+    stop_failed_playit_agent
+  fi
   PLAYIT_AGENT_STATUS=failed
   PLAYIT_AGENT_DIAGNOSTIC="$diagnostic"
   TUNNEL_STATE=error
+  TUNNEL_DIAGNOSTIC="$tunnel_diagnostic"
   TUNNEL_MSG="$message"
   export PLAYIT_AGENT_STATUS PLAYIT_AGENT_DIAGNOSTIC PLAYIT_SECRET_STATUS SERVER_PORT_STATUS GAME_PORT
-  export TUNNEL_STATE TUNNEL_MSG TUNNEL_ADDR TUNNEL_NAME TUNNEL_ID TUNNEL_PROTO TUNNEL_ISSUE TUNNEL_LOCAL_IP TUNNEL_LOCAL_PORT AGENT_ID
-  log "PLAYIT_AGENT_FAILED diagnostic=$PLAYIT_AGENT_DIAGNOSTIC"
+  export TUNNEL_STATE TUNNEL_MSG TUNNEL_DIAGNOSTIC TUNNEL_ADDR TUNNEL_NAME TUNNEL_ID TUNNEL_PROTO TUNNEL_ISSUE TUNNEL_LOCAL_IP TUNNEL_LOCAL_PORT AGENT_ID
+  log "PLAYIT_AGENT_FAILED diagnostic=$PLAYIT_AGENT_DIAGNOSTIC exit_code=$PLAYIT_AGENT_EXIT_CODE"
   publish_status starting false "playit-agent-failed" "" "" "$TUNNEL_STATE" "$TUNNEL_MSG"
 }
 
 start_playit() {
   TUNNEL_STATE=unknown
+  TUNNEL_DIAGNOSTIC=secret_missing
   TUNNEL_MSG="Playit Agent has not started; save PLAYIT_SECRET_KEY and start the server cycle."
   TUNNEL_ADDR=""
   TUNNEL_NAME=""
@@ -1114,13 +1240,14 @@ start_playit() {
   TUNNEL_LOCAL_IP=""
   TUNNEL_LOCAL_PORT=""
   AGENT_ID=""
-  PLAYIT_SECRET_STATUS=missing
+  PLAYIT_AGENT_EXIT_CODE=not_started
+  PLAYIT_AGENT_EXIT_CAPTURED=false
   PLAYIT_AGENT_STATUS=not_started
   PLAYIT_AGENT_DIAGNOSTIC=secret_missing
-
   if [ -z "${PLAYIT_SECRET_KEY:-}" ]; then
-    export PLAYIT_AGENT_STATUS PLAYIT_AGENT_DIAGNOSTIC PLAYIT_SECRET_STATUS SERVER_PORT_STATUS GAME_PORT
-    export TUNNEL_STATE TUNNEL_MSG TUNNEL_ADDR TUNNEL_NAME TUNNEL_ID TUNNEL_PROTO TUNNEL_ISSUE TUNNEL_LOCAL_IP TUNNEL_LOCAL_PORT AGENT_ID
+    PLAYIT_SECRET_STATUS=missing
+    export PLAYIT_AGENT_STATUS PLAYIT_AGENT_DIAGNOSTIC PLAYIT_AGENT_EXIT_CODE PLAYIT_SECRET_STATUS SERVER_PORT_STATUS GAME_PORT
+    export TUNNEL_STATE TUNNEL_MSG TUNNEL_DIAGNOSTIC TUNNEL_ADDR TUNNEL_NAME TUNNEL_ID TUNNEL_PROTO TUNNEL_ISSUE TUNNEL_LOCAL_IP TUNNEL_LOCAL_PORT AGENT_ID
     log "PLAYIT_SECRET_INJECTED=false; Agent was not started"
     return 0
   fi
@@ -1137,8 +1264,14 @@ start_playit() {
   fi
 
   local run_tag="${GITHUB_RUN_ID:-local}-${GITHUB_RUN_ATTEMPT:-1}"
-  PLAYIT_TEMP_DIR="${RUNNER_TEMP:-/tmp}/nova-playit-${run_tag}"
-  mkdir -p "$PLAYIT_TEMP_DIR" || {
+  local runner_temp="${RUNNER_TEMP:-/tmp}"
+  mkdir -p -- "$runner_temp" || {
+    unset secret_value
+    playit_agent_failure temp_directory_unavailable "The private runner temporary directory could not be created."
+    return 0
+  }
+  PLAYIT_TEMP_DIR="$(mktemp -d "$runner_temp/nova-playit-${run_tag}.XXXXXX")" || {
+    unset secret_value
     playit_agent_failure temp_directory_unavailable "The private runner temporary directory could not be created."
     return 0
   }
@@ -1171,10 +1304,12 @@ start_playit() {
   export PLAYIT_SECRET_FILE PLAYIT_LOG_PATH
   PLAYIT_AGENT_STATUS=starting
   PLAYIT_AGENT_DIAGNOSTIC=starting
+  PLAYIT_AGENT_EXIT_CODE=not_started
   TUNNEL_STATE=unknown
+  TUNNEL_DIAGNOSTIC=agent_starting
   TUNNEL_MSG="Official Playit Agent is starting; connection is not confirmed yet."
-  export PLAYIT_AGENT_STATUS PLAYIT_AGENT_DIAGNOSTIC PLAYIT_SECRET_STATUS SERVER_PORT_STATUS GAME_PORT
-  export TUNNEL_STATE TUNNEL_MSG TUNNEL_ADDR TUNNEL_NAME TUNNEL_ID TUNNEL_PROTO TUNNEL_ISSUE TUNNEL_LOCAL_IP TUNNEL_LOCAL_PORT AGENT_ID
+  export PLAYIT_AGENT_STATUS PLAYIT_AGENT_DIAGNOSTIC PLAYIT_AGENT_EXIT_CODE PLAYIT_SECRET_STATUS SERVER_PORT_STATUS GAME_PORT
+  export TUNNEL_STATE TUNNEL_MSG TUNNEL_DIAGNOSTIC TUNNEL_ADDR TUNNEL_NAME TUNNEL_ID TUNNEL_PROTO TUNNEL_ISSUE TUNNEL_LOCAL_IP TUNNEL_LOCAL_PORT AGENT_ID
   log "PLAYIT_SECRET_INJECTED=true (secret value redacted)"
   publish_status starting false "playit-agent-starting" "" "" "$TUNNEL_STATE" "$TUNNEL_MSG"
 
@@ -1209,9 +1344,12 @@ start_playit() {
   nohup "$WORKSPACE_ABS/playitd" --secret-path "$PLAYIT_SECRET_FILE" --platform-docker \
     > "$PLAYIT_LOG_PATH" 2>&1 </dev/null &
   PLAYIT_PID=$!
+  PLAYIT_AGENT_EXIT_CODE=running
+  PLAYIT_AGENT_EXIT_CAPTURED=false
   local attempt="" failure_diagnostic="startup_timeout"
   for attempt in $(seq 1 45); do
     if ! kill -0 "$PLAYIT_PID" 2>/dev/null; then
+      record_playit_agent_exit
       failure_diagnostic=process_exited
       break
     fi
@@ -1247,16 +1385,17 @@ start_playit() {
         playit_agent_failure account_agent_limit "The Playit account has reached its Agent limit."
         ;;
       process_exited)
-        playit_agent_failure process_exited "The official Playit Agent exited before confirming its connection."
+        playit_agent_failure process_exited "The official Playit Agent exited before connecting (exit code ${PLAYIT_AGENT_EXIT_CODE})."
         ;;
       *)
         PLAYIT_AGENT_STATUS=starting
         PLAYIT_AGENT_DIAGNOSTIC="$failure_diagnostic"
         TUNNEL_STATE=unknown
-        TUNNEL_MSG="Playit has not confirmed Agent connectivity yet; the running daemon will keep retrying."
-        export PLAYIT_AGENT_STATUS PLAYIT_AGENT_DIAGNOSTIC PLAYIT_SECRET_STATUS SERVER_PORT_STATUS GAME_PORT
-        export TUNNEL_STATE TUNNEL_MSG TUNNEL_ADDR TUNNEL_NAME TUNNEL_ID TUNNEL_PROTO TUNNEL_ISSUE TUNNEL_LOCAL_IP TUNNEL_LOCAL_PORT AGENT_ID
-        log "PLAYIT_AGENT_STILL_STARTING diagnostic=$PLAYIT_AGENT_DIAGNOSTIC"
+        TUNNEL_DIAGNOSTIC="agent_$failure_diagnostic"
+        TUNNEL_MSG="Playit has not confirmed Agent connectivity; the daemon is still running and will retry."
+        export PLAYIT_AGENT_STATUS PLAYIT_AGENT_DIAGNOSTIC PLAYIT_AGENT_EXIT_CODE PLAYIT_SECRET_STATUS SERVER_PORT_STATUS GAME_PORT
+        export TUNNEL_STATE TUNNEL_MSG TUNNEL_DIAGNOSTIC TUNNEL_ADDR TUNNEL_NAME TUNNEL_ID TUNNEL_PROTO TUNNEL_ISSUE TUNNEL_LOCAL_IP TUNNEL_LOCAL_PORT AGENT_ID
+        log "PLAYIT_AGENT_STILL_STARTING diagnostic=$PLAYIT_AGENT_DIAGNOSTIC exit_code=$PLAYIT_AGENT_EXIT_CODE"
         publish_status starting false "playit-agent-starting" "" "" "$TUNNEL_STATE" "$TUNNEL_MSG"
         ;;
     esac
@@ -1265,8 +1404,10 @@ start_playit() {
 
   PLAYIT_AGENT_STATUS=connected
   PLAYIT_AGENT_DIAGNOSTIC=connected
+  PLAYIT_AGENT_EXIT_CODE=running
+  TUNNEL_DIAGNOSTIC=agent_connected
   TUNNEL_MSG="Official Playit Agent confirmed connected; tunnels loaded."
-  export PLAYIT_AGENT_STATUS PLAYIT_AGENT_DIAGNOSTIC PLAYIT_SECRET_STATUS SERVER_PORT_STATUS GAME_PORT
+  export PLAYIT_AGENT_STATUS PLAYIT_AGENT_DIAGNOSTIC PLAYIT_AGENT_EXIT_CODE PLAYIT_SECRET_STATUS SERVER_PORT_STATUS GAME_PORT
   log "PLAYIT_AGENT_CONNECTED: official daemon log confirmed 'playit connected; tunnels loaded'"
   if refresh_tunnel; then
     case "$TUNNEL_STATE" in
@@ -1276,7 +1417,7 @@ start_playit() {
       unsupported) TUNNEL_MSG="The reported Tunnel type or transport is unsupported for this Minecraft edition." ;;
       address_unavailable) TUNNEL_MSG="The matching Playit Tunnel exists, but its public address is unavailable." ;;
       selection_required) TUNNEL_MSG="Several matching Playit Tunnels exist or the saved selection is unavailable; select one in NOVA CRAFT." ;;
-      error) TUNNEL_MSG="The official Agent is connected, but Playit did not return usable Tunnel data." ;;
+      error) [ -n "$TUNNEL_MSG" ] || TUNNEL_MSG="The official Agent is connected, but Playit did not return usable Tunnel data." ;;
     esac
   else
     [ "$PLAYIT_AGENT_STATUS" = "failed" ] || TUNNEL_STATE=error
@@ -1288,7 +1429,8 @@ start_playit() {
 }
 
 TUNNEL_STATE=unknown
-TUNNEL_MSG=""
+TUNNEL_DIAGNOSTIC=minecraft_starting
+TUNNEL_MSG="Minecraft is starting. The Playit Agent will start only after the local game protocol responds."
 TUNNEL_ADDR=""
 TUNNEL_NAME=""
 TUNNEL_ID=""
@@ -1299,11 +1441,9 @@ TUNNEL_ISSUE=""
 AGENT_ID=""
 PLAYIT_PID=""
 PLAYIT_CURL_CONFIG=""
-start_playit
-LAST_TUNNEL_REFRESH=$(date +%s)
-
-export TUNNEL_STATE TUNNEL_MSG TUNNEL_ADDR TUNNEL_NAME TUNNEL_ID TUNNEL_PROTO TUNNEL_ISSUE TUNNEL_LOCAL_IP TUNNEL_LOCAL_PORT AGENT_ID
-export PLAYIT_AGENT_STATUS PLAYIT_AGENT_DIAGNOSTIC PLAYIT_SECRET_STATUS SERVER_PORT_STATUS GAME_PORT
+export TUNNEL_STATE TUNNEL_MSG TUNNEL_DIAGNOSTIC TUNNEL_ADDR TUNNEL_NAME TUNNEL_ID TUNNEL_PROTO TUNNEL_ISSUE TUNNEL_LOCAL_IP TUNNEL_LOCAL_PORT AGENT_ID
+export PLAYIT_AGENT_STATUS PLAYIT_AGENT_DIAGNOSTIC PLAYIT_AGENT_EXIT_CODE PLAYIT_SECRET_STATUS SERVER_PORT_STATUS GAME_PORT
+publish_status starting false "minecraft-starting" "" "" "$TUNNEL_STATE" "$TUNNEL_MSG"
 
 # ---------------------------------------------------------------- runtime ---
 
@@ -1373,6 +1513,20 @@ if ! kill -0 "$SRV_PID" 2>/dev/null && [ "$SERVER_READY" != "true" ]; then
   publish_cycle_end failure "server-crashed"
   exit 1
 fi
+if [ "$SERVER_READY" != "true" ]; then
+  log "ERROR Minecraft did not report ready within 900 seconds; Playit Agent was not started"
+  tail -n 80 "$DATA_ABS/server.log" || true
+  send_cmd "stop"
+  kill "$SRV_PID" 2>/dev/null || true
+  SERVER_PORT_STATUS=not_listening
+  TUNNEL_STATE=server_port_not_listening
+  TUNNEL_DIAGNOSTIC=minecraft_start_timeout
+  TUNNEL_MSG="Minecraft did not become ready within 900 seconds; Playit Agent was not started."
+  export SERVER_PORT_STATUS GAME_PORT TUNNEL_STATE TUNNEL_MSG TUNNEL_DIAGNOSTIC
+  publish_live "$DATA_ABS/server.log"
+  publish_cycle_end failure "server-start-timeout"
+  exit 1
+fi
 
 players_count() {
   local line
@@ -1397,17 +1551,30 @@ if probe_tunnel "127.0.0.1:$GAME_PORT" false; then
 else
   SERVER_PORT_STATUS=not_listening
 fi
-if [ "$SERVER_PORT_STATUS" = "not_listening" ] && [ "$PLAYIT_AGENT_STATUS" = "connected" ] && [ -n "$TUNNEL_ADDR" ] && [ "$TUNNEL_STATE" = "allocated" ]; then
+if [ "$SERVER_PORT_STATUS" = "listening" ]; then
+  # Start the official daemon only after Minecraft answered its local game
+  # protocol. This keeps an Agent failure independent from server readiness.
+  start_playit
+  LAST_TUNNEL_REFRESH=$(date +%s)
+else
+  PLAYIT_AGENT_STATUS=not_started
+  PLAYIT_AGENT_DIAGNOSTIC=minecraft_port_not_listening
+  PLAYIT_AGENT_EXIT_CODE=not_started
   TUNNEL_STATE=server_port_not_listening
-  TUNNEL_MSG="Playit Tunnel is allocated, but Minecraft did not answer on local port $GAME_PORT."
+  TUNNEL_DIAGNOSTIC=server_port_not_listening
+  TUNNEL_ADDR=""
+  TUNNEL_MSG="Minecraft did not answer its local game protocol on port $GAME_PORT; Playit Agent was not started."
+  log "PLAYIT_AGENT_NOT_STARTED reason=minecraft_port_not_listening game_port=$GAME_PORT"
 fi
-export SERVER_PORT_STATUS GAME_PORT TUNNEL_STATE TUNNEL_MSG
+export SERVER_PORT_STATUS GAME_PORT PLAYIT_AGENT_STATUS PLAYIT_AGENT_DIAGNOSTIC PLAYIT_AGENT_EXIT_CODE PLAYIT_SECRET_STATUS
+export TUNNEL_STATE TUNNEL_MSG TUNNEL_DIAGNOSTIC TUNNEL_ADDR TUNNEL_NAME TUNNEL_ID TUNNEL_PROTO TUNNEL_ISSUE TUNNEL_LOCAL_IP TUNNEL_LOCAL_PORT AGENT_ID
 
-# Start the five-hour runtime budget only after the server is actually ready.
+# Start the five-hour runtime budget only after local Minecraft readiness and
+# the Agent/Tunnel checks have completed (or their failure has been diagnosed).
 JOB_STARTED=$(date +%s)
-publish_status ready true "server-ready" "$(parse_players "$(players_count)")" "$(parse_max "$(players_count)")" "$TUNNEL_STATE" "$TUNNEL_MSG"
 publish_live "$DATA_ABS/server.log"
 publish_files
+publish_status ready true "server-ready" "$(parse_players "$(players_count)")" "$(parse_max "$(players_count)")" "$TUNNEL_STATE" "$TUNNEL_MSG"
 
 STOP_FLAG=/tmp/nova-stop
 BACKUP_REQUEST_FLAG=/tmp/nova-backup-request
@@ -1462,10 +1629,15 @@ heartbeat() {
 
     if [ -n "$PLAYIT_PID" ]; then
       if ! kill -0 "$PLAYIT_PID" 2>/dev/null; then
-        PLAYIT_AGENT_STATUS=failed
-        PLAYIT_AGENT_DIAGNOSTIC=process_exited
-        TUNNEL_STATE=error
-        TUNNEL_MSG="The Playit Agent exited while Minecraft was running."
+        if [ "$PLAYIT_AGENT_STATUS" != "failed" ]; then
+          record_playit_agent_exit
+          PLAYIT_AGENT_STATUS=failed
+          PLAYIT_AGENT_DIAGNOSTIC=process_exited
+          TUNNEL_STATE=error
+          TUNNEL_DIAGNOSTIC=agent_process_exited
+          TUNNEL_MSG="The Playit Agent exited while Minecraft was running (exit code ${PLAYIT_AGENT_EXIT_CODE})."
+          log "PLAYIT_AGENT_FAILED diagnostic=process_exited exit_code=$PLAYIT_AGENT_EXIT_CODE"
+        fi
       elif grep -Fiq 'playit connected; tunnels loaded' "$PLAYIT_LOG_PATH"; then
         if [ "$PLAYIT_AGENT_STATUS" != "connected" ]; then
           PLAYIT_AGENT_STATUS=connected
@@ -1489,11 +1661,12 @@ heartbeat() {
           unsupported) TUNNEL_MSG="The reported Tunnel type or transport is unsupported for this Minecraft edition." ;;
           address_unavailable) TUNNEL_MSG="The matching Playit Tunnel exists, but its public address is unavailable." ;;
           selection_required) TUNNEL_MSG="Select one matching Playit Tunnel in NOVA CRAFT." ;;
-          error) TUNNEL_MSG="The official Agent is connected, but Playit did not return usable Tunnel data." ;;
+          error) [ -n "$TUNNEL_MSG" ] || TUNNEL_MSG="The official Agent is connected, but Playit did not return usable Tunnel data." ;;
         esac
       else
         TUNNEL_STATE=error
-        [ "$PLAYIT_AGENT_STATUS" = "failed" ] || TUNNEL_MSG="The Playit rundata request did not complete during refresh."
+        [ -n "$TUNNEL_DIAGNOSTIC" ] || TUNNEL_DIAGNOSTIC=rundata_network_error
+        [ -n "$TUNNEL_MSG" ] || TUNNEL_MSG="The Playit rundata refresh failed; inspect the sanitized API diagnostic."
       fi
     fi
 
@@ -1502,20 +1675,25 @@ heartbeat() {
     # uses RakNet's unconnected UDP ping. A raw socket connect is never enough.
     case "$TUNNEL_STATE" in
       allocated|connecting|connected|server_port_not_listening|origin_mismatch)
-        if [ "$PLAYIT_AGENT_STATUS" = "failed" ]; then
+        if [ "$SERVER_PORT_STATUS" != "listening" ]; then
+          TUNNEL_STATE=server_port_not_listening
+          TUNNEL_DIAGNOSTIC=server_port_not_listening
+          TUNNEL_MSG="The local Minecraft game port $GAME_PORT did not answer its protocol ping."
+        elif [ "$PLAYIT_AGENT_STATUS" = "failed" ]; then
           TUNNEL_STATE=error
+          TUNNEL_DIAGNOSTIC="agent_$PLAYIT_AGENT_DIAGNOSTIC"
           TUNNEL_MSG="The Playit Agent failed while Minecraft was running."
         elif [ "$PLAYIT_AGENT_STATUS" != "connected" ]; then
           TUNNEL_STATE=unknown
+          TUNNEL_DIAGNOSTIC=agent_not_connected
           TUNNEL_MSG="Waiting for the official Playit Agent connection."
-        elif [ "$SERVER_PORT_STATUS" != "listening" ]; then
-          TUNNEL_STATE=server_port_not_listening
-          TUNNEL_MSG="The local Minecraft game port $GAME_PORT did not answer its protocol ping."
         elif [ -n "$TUNNEL_LOCAL_PORT" ] && [ "$TUNNEL_LOCAL_PORT" != "$GAME_PORT" ]; then
           TUNNEL_STATE=origin_mismatch
+          TUNNEL_DIAGNOSTIC=origin_mismatch
           TUNNEL_MSG="The Playit Tunnel targets local port $TUNNEL_LOCAL_PORT; Minecraft is configured for port $GAME_PORT."
         elif [ -n "$TUNNEL_ADDR" ] && probe_tunnel "$TUNNEL_ADDR" true; then
           TUNNEL_STATE=connected
+          TUNNEL_DIAGNOSTIC=connected
           if [ "$EDITION" = "BEDROCK" ]; then
             TUNNEL_MSG="Playit's reported address answered a Bedrock RakNet ping."
           else
@@ -1523,20 +1701,21 @@ heartbeat() {
           fi
         else
           TUNNEL_STATE=connecting
+          TUNNEL_DIAGNOSTIC=connecting
           TUNNEL_MSG="The local game port is ready; waiting for Playit's public address to answer the Minecraft protocol ping."
         fi
         ;;
     esac
 
-    export PLAYIT_AGENT_STATUS PLAYIT_AGENT_DIAGNOSTIC PLAYIT_SECRET_STATUS SERVER_PORT_STATUS GAME_PORT
-    export TUNNEL_STATE TUNNEL_MSG TUNNEL_ADDR TUNNEL_NAME TUNNEL_ID TUNNEL_PROTO TUNNEL_ISSUE TUNNEL_LOCAL_IP TUNNEL_LOCAL_PORT AGENT_ID
+    export PLAYIT_AGENT_STATUS PLAYIT_AGENT_DIAGNOSTIC PLAYIT_AGENT_EXIT_CODE PLAYIT_SECRET_STATUS SERVER_PORT_STATUS GAME_PORT
+    export TUNNEL_STATE TUNNEL_MSG TUNNEL_DIAGNOSTIC TUNNEL_ADDR TUNNEL_NAME TUNNEL_ID TUNNEL_PROTO TUNNEL_ISSUE TUNNEL_LOCAL_IP TUNNEL_LOCAL_PORT AGENT_ID
     latency=""
-    publish_status ready true "server-ready" "$players" "$(parse_max "$line")" "$TUNNEL_STATE" "$TUNNEL_MSG" "$latency"
     publish_live "$DATA_ABS/server.log"
     if [ $(( $(date +%s) - LAST_FILES_PUBLISH )) -ge 300 ]; then
       LAST_FILES_PUBLISH=$(date +%s)
       publish_files
     fi
+    publish_status ready true "server-ready" "$players" "$(parse_max "$line")" "$TUNNEL_STATE" "$TUNNEL_MSG" "$latency"
   done
 }
 
@@ -1614,19 +1793,27 @@ if [ -n "$PLAYIT_PID" ]; then
       PLAYIT_AGENT_DIAGNOSTIC=cycle_ended
     fi
     kill "$PLAYIT_PID" 2>/dev/null || true
+    wait "$PLAYIT_PID" 2>/dev/null || true
+    PLAYIT_AGENT_EXIT_CODE=cycle_ended
+    PLAYIT_AGENT_EXIT_CAPTURED=true
   elif [ "$PLAYIT_AGENT_STATUS" != "failed" ] && [ "$PLAYIT_AGENT_STATUS" != "not_started" ]; then
+    record_playit_agent_exit
     PLAYIT_AGENT_STATUS=failed
     PLAYIT_AGENT_DIAGNOSTIC=process_exited
+    TUNNEL_STATE=error
+    TUNNEL_DIAGNOSTIC=agent_process_exited
+    TUNNEL_MSG="The Playit Agent exited before the cycle ended (exit code ${PLAYIT_AGENT_EXIT_CODE})."
   fi
 fi
 if [ "$PLAYIT_AGENT_STATUS" = "stopped" ]; then
   TUNNEL_STATE=unknown
+  TUNNEL_DIAGNOSTIC=cycle_ended
   TUNNEL_ADDR=""
   TUNNEL_MSG="The GitHub Actions server cycle ended; the Agent and live Tunnel are no longer running."
 fi
 SERVER_PORT_STATUS=unknown
-export PLAYIT_AGENT_STATUS PLAYIT_AGENT_DIAGNOSTIC PLAYIT_SECRET_STATUS SERVER_PORT_STATUS GAME_PORT
-export TUNNEL_STATE TUNNEL_MSG TUNNEL_ADDR TUNNEL_NAME TUNNEL_ID TUNNEL_PROTO TUNNEL_ISSUE TUNNEL_LOCAL_IP TUNNEL_LOCAL_PORT AGENT_ID
+export PLAYIT_AGENT_STATUS PLAYIT_AGENT_DIAGNOSTIC PLAYIT_AGENT_EXIT_CODE PLAYIT_SECRET_STATUS SERVER_PORT_STATUS GAME_PORT
+export TUNNEL_STATE TUNNEL_MSG TUNNEL_DIAGNOSTIC TUNNEL_ADDR TUNNEL_NAME TUNNEL_ID TUNNEL_PROTO TUNNEL_ISSUE TUNNEL_LOCAL_IP TUNNEL_LOCAL_PORT AGENT_ID
 
 publish_live "$DATA_ABS/server.log"
 publish_files
@@ -1665,10 +1852,9 @@ TYPES = {"JAVA": "minecraft-java", "BEDROCK": "minecraft-bedrock"}
 def load(path):
     try:
         with open(path, "r", encoding="utf-8") as handle:
-            value = json.load(handle)
-        return value if isinstance(value, dict) else {}
+            return json.load(handle)
     except (OSError, ValueError):
-        return {}
+        return None
 
 
 def unwrap(raw):
@@ -1830,12 +2016,41 @@ def parse(argv):
     out_path = argv[1]
     edition = argv[2] if len(argv) > 2 else "JAVA"
     requested_id = argv[3] if len(argv) > 3 else ""
-    data, error = unwrap(raw)
-    tunnels = [t for t in (data.get("tunnels") or []) if isinstance(t, dict)]
+    if raw is None:
+        data, error = {}, "invalid-json"
+    else:
+        data, error = unwrap(raw)
+    raw_tunnels = data.get("tunnels") if not error else None
+    if not error and (not isinstance(data.get("agent_id"), str) or not data.get("agent_id") or not isinstance(raw_tunnels, list)):
+        error = "invalid-schema"
+    if not error:
+        for tunnel in raw_tunnels:
+            if (not isinstance(tunnel, dict)
+                    or not isinstance(tunnel.get("id") or tunnel.get("tunnel_id"), str)
+                    or not (tunnel.get("id") or tunnel.get("tunnel_id"))
+                    or not isinstance(tunnel.get("name"), str)
+                    or not isinstance(tunnel.get("port_type"), str)
+                    or not isinstance(tunnel.get("display_address"), str)):
+                error = "invalid-schema"
+                break
+    tunnels = raw_tunnels if not error else []
     chosen, message, selection_state = pick_tunnel(tunnels, edition, requested_id) if not error else (None, "", "error")
+    diagnostic = {
+        "invalid-json": "rundata_invalid_json",
+        "invalid-schema": "rundata_invalid_schema",
+        "invalid-response": "rundata_invalid_response",
+        "api-error": "rundata_api_error",
+    }.get(error, "")
+    error_message = {
+        "invalid-json": "Playit rundata response was not valid JSON.",
+        "invalid-schema": "Playit rundata did not contain a valid agent ID and Tunnel list.",
+        "invalid-response": "Playit rundata response had an unexpected JSON shape.",
+        "api-error": "Playit agent API returned an error response.",
+    }.get(error, "Playit rundata could not be interpreted.")
     values = {
         "AGENT_ID": str(data.get("agent_id") or ""),
         "TUNNEL_STATE": "error",
+        "TUNNEL_DIAGNOSTIC": diagnostic,
         "TUNNEL_Q_MSG": "",
         "TUNNEL_ADDR": "",
         "TUNNEL_NAME": "",
@@ -1846,7 +2061,7 @@ def parse(argv):
         "TUNNEL_ISSUE": "",
     }
     if error:
-        values["TUNNEL_Q_MSG"] = "Playit agent API returned an error; check the Agent key and network."
+        values["TUNNEL_Q_MSG"] = error_message
     elif chosen:
         reason = chosen.get("disabled_reason")
         if isinstance(reason, dict):
@@ -1867,6 +2082,8 @@ def parse(argv):
     else:
         values["TUNNEL_STATE"] = selection_state
         values["TUNNEL_Q_MSG"] = message
+    if not values["TUNNEL_DIAGNOSTIC"]:
+        values["TUNNEL_DIAGNOSTIC"] = values["TUNNEL_STATE"]
     with open(out_path, "w", encoding="utf-8") as handle:
         for key, value in values.items():
             handle.write("%s=%s\n" % (key, shlex.quote(value)))
@@ -1901,8 +2118,10 @@ Modes
 import base64
 import json
 import os
+import re
 import shutil
 import sys
+import tempfile
 import time
 import zipfile
 
@@ -1911,20 +2130,37 @@ MAX_MANIFEST_ENTRIES = 4000
 SKIP_DIRS = {"libraries", "versions", ".fabric", "cache", ".cache", "tmp", "crash-reports"}
 
 
+def safe_data_root(root):
+    root_abs = os.path.abspath(root)
+    if os.path.islink(root_abs) or not os.path.isdir(root_abs):
+        raise ValueError("unsafe data root")
+    root_real = os.path.realpath(root_abs)
+    if not os.path.isdir(root_real):
+        raise ValueError("unsafe data root")
+    return root_real
+
+
 def safe_path(root, rel):
-    root_real = os.path.realpath(root)
-    rel = (rel or "").replace("\\", "/").strip()
-    rel = rel.lstrip("/")
-    if not rel or rel == ".":
+    root_real = safe_data_root(root)
+    if rel is None or rel == "":
         return root_real
-    candidate = os.path.realpath(os.path.join(root_real, rel))
+    if not isinstance(rel, str) or rel != rel.strip():
+        raise ValueError("path-outside-root")
+    normalized = rel.replace("\\", "/")
+    if normalized == ".":
+        return root_real
+    parts = normalized.split("/")
+    if (normalized.startswith("/") or any(part in ("", ".", "..") for part in parts)
+            or re.match(r"^[A-Za-z]:", parts[0])):
+        raise ValueError("path-outside-root")
+    candidate = os.path.realpath(os.path.join(root_real, *parts))
     if candidate != root_real and not candidate.startswith(root_real + os.sep):
         raise ValueError("path-outside-root")
     return candidate
 
 
 def manifest(root):
-    root_real = os.path.realpath(root)
+    root_real = safe_data_root(root)
     files = []
     dirs = []
     truncated = False
@@ -1967,6 +2203,24 @@ def _ok(**kwargs):
 
 def _fail(code):
     return {"ok": False, "error": code}
+
+
+def atomic_write_bytes(path, data):
+    parent = os.path.dirname(os.path.abspath(path))
+    os.makedirs(parent, exist_ok=True)
+    fd, temporary = tempfile.mkstemp(prefix=".nova-craft-", dir=parent)
+    try:
+        with os.fdopen(fd, "wb") as handle_file:
+            handle_file.write(data)
+        os.replace(temporary, path)
+    finally:
+        if os.path.exists(temporary):
+            os.unlink(temporary)
+
+
+def atomic_write_json(path, payload):
+    data = json.dumps(payload, separators=(",", ":")).encode("utf-8")
+    atomic_write_bytes(path, data)
 
 
 def handle(root, request):
@@ -2012,11 +2266,11 @@ def handle(root, request):
         data = base64.b64decode(request.get("content") or "")
         if len(data) > 2 * 1024 * 1024:
             return _fail("too-large")
-        os.makedirs(os.path.dirname(target) or root, exist_ok=True)
-        tmp = target + ".nova-tmp"
-        with open(tmp, "wb") as handle_file:
-            handle_file.write(data)
-        os.replace(tmp, target)
+        os.makedirs(os.path.dirname(target) or os.path.realpath(root), exist_ok=True)
+        # A fixed sibling temporary name could be pre-created as a symlink to
+        # a file outside the server data root. mkstemp uses O_EXCL and a random
+        # name, then replace atomically installs the new file.
+        atomic_write_bytes(target, data)
         return _ok(path=os.path.relpath(target, os.path.realpath(root)).replace(os.sep, "/"), size=len(data))
     if op == "mkdir":
         target = safe_path(root, request.get("path") or "")
@@ -2231,7 +2485,7 @@ def snapshot(root, out_path):
     publishes the current contents, the app edits the JSON, and the runner
     re-applies it on top of the restored cache before the next start.
     """
-    root_real = os.path.realpath(root)
+    root_real = safe_data_root(root)
     files = {}
     total = 0
     truncated = False
@@ -2268,9 +2522,7 @@ def snapshot(root, out_path):
         "truncated": truncated,
         "files": files,
     }
-    os.makedirs(os.path.dirname(out_path) or ".", exist_ok=True)
-    with open(out_path, "w", encoding="utf-8") as handle_file:
-        json.dump(payload, handle_file, separators=(",", ":"))
+    atomic_write_json(out_path, payload)
     return payload
 
 
@@ -2284,9 +2536,8 @@ def apply_snapshot(root, snap_path):
     applied = 0
     for rel, encoded in (payload.get("files") or {}).items():
         dest = safe_path(root, rel)
-        os.makedirs(os.path.dirname(dest) or root, exist_ok=True)
-        with open(dest, "wb") as handle_file:
-            handle_file.write(base64.b64decode(encoded))
+        os.makedirs(os.path.dirname(dest) or os.path.realpath(root), exist_ok=True)
+        atomic_write_bytes(dest, base64.b64decode(encoded))
         applied += 1
     return {"ok": True, "applied": applied}
 
@@ -2298,15 +2549,14 @@ def main(argv):
     mode = argv[1]
     if mode == "manifest":
         root, out = argv[2], argv[3]
-        os.makedirs(root, exist_ok=True)
+        root = safe_data_root(root)
         data = manifest(root)
-        with open(out, "w", encoding="utf-8") as handle_file:
-            json.dump(data, handle_file, separators=(",", ":"))
+        atomic_write_json(out, data)
         print("manifest %d files" % len(data["files"]))
         return 0
     if mode == "request":
         root, request_path, response_path = argv[2], argv[3], argv[4]
-        os.makedirs(root, exist_ok=True)
+        root = safe_data_root(root)
         try:
             with open(request_path, "r", encoding="utf-8") as handle_file:
                 request = json.load(handle_file)

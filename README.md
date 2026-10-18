@@ -33,6 +33,8 @@ Playit is optional. To use it:
 
 Playit may be skipped during setup and linked later from Network settings. The screen distinguishes Secret saved, Agent starting/connected/failed, Tunnel state, local server-port status, and externally verified connection. Runner Agent logs are bounded and redacted before publication. The GitHub Actions server cycle is temporary rather than 24/7 hosting.
 
+For a server created by an older app version, stop all of its Actions runs and use **Server settings → Update runner**. This guarded action checks for active runs and updates only generated workflow/helper files; it leaves the world, game properties and GitHub Secrets untouched.
+
 ## Server lifecycle
 
 Each server uses its own GitHub repository and generated `.github/workflows/novacraft-server.yml` workflow. The runner is limited to a five-hour runtime budget inside GitHub Actions' six-hour job limit; it is not a 24/7 hosting service. Automatic continuation dispatches another cycle only when enabled and the server was not explicitly stopped. GitHub Actions quotas, queueing, runner availability, network access, and the repository plan apply.

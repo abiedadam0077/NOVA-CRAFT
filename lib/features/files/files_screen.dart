@@ -1,4 +1,6 @@
+import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
@@ -8,6 +10,7 @@ import '../../core/formatters.dart';
 import '../../core/models.dart';
 import '../../core/provisioner.dart';
 import '../../core/strings.dart';
+import '../../core/validation.dart';
 import '../../design/theme.dart';
 import '../../design/tokens.dart';
 import '../../design/widgets/buttons.dart';
@@ -16,6 +19,17 @@ import '../../design/widgets/feedback.dart';
 import '../../design/widgets/inputs.dart';
 import '../../design/widgets/surfaces.dart';
 import '../../state/app_state.dart';
+
+bool _isSafeServerRelativePath(String value) {
+  if (value.isEmpty ||
+      value != value.trim() ||
+      value.startsWith('/') ||
+      value.contains(String.fromCharCode(92)) ||
+      value.codeUnits.any((int code) => code < 0x20 || code == 0x7f)) {
+    return false;
+  }
+  return value.split('/').every((String part) => part.isNotEmpty && part != '.' && part != '..');
+}
 
 /// One entry of the runner's file manifest.
 class ServerFileEntry {
@@ -28,15 +42,36 @@ class ServerFileEntry {
 
   String get name => path.contains('/') ? path.split('/').last : path;
 
-  factory ServerFileEntry.fromJson(Map<String, dynamic> o, {required bool isDir}) => ServerFileEntry(
-        path: o['path']?.toString() ?? '',
-        size: (o['size'] as num?)?.toInt() ?? 0,
-        modified: DateTime.tryParse(o['modified']?.toString() ?? '')?.toLocal() ??
-            ((o['modified'] is num)
-                ? DateTime.fromMillisecondsSinceEpoch(((o['modified'] as num).toInt()) * 1000)
-                : null),
-        isDir: isDir,
-      );
+  factory ServerFileEntry.fromJson(Map<String, dynamic> o, {required bool isDir}) {
+    final dynamic rawPath = o['path'];
+    final dynamic rawSize = o['size'];
+    final dynamic rawModified = o['modified'];
+    if (rawPath is! String || rawPath.isEmpty || rawSize is! int || rawSize < 0) {
+      throw const FormatException('Manifest file entry is missing a valid path or size');
+    }
+    DateTime? modified;
+    if (rawModified is num && rawModified.isFinite && rawModified >= 0) {
+      if (rawModified > 8640000000000 || rawModified != rawModified.roundToDouble()) {
+        throw const FormatException('Manifest file timestamp is outside the supported range');
+      }
+      try {
+        modified = DateTime.fromMillisecondsSinceEpoch(rawModified.toInt() * 1000).toLocal();
+      } on ArgumentError {
+        throw const FormatException('Manifest file timestamp is outside the supported range');
+      }
+    } else if (rawModified is String) {
+      modified = DateTime.tryParse(rawModified)?.toLocal();
+      if (modified == null) throw const FormatException('Manifest file timestamp is invalid');
+    } else if (rawModified != null) {
+      throw const FormatException('Manifest file timestamp has an unexpected type');
+    }
+    return ServerFileEntry(
+      path: rawPath,
+      size: rawSize.toInt(),
+      modified: modified,
+      isDir: isDir,
+    );
+  }
 }
 
 /// Parsed `nova-craft/files/manifest.json`.
@@ -50,24 +85,54 @@ class ServerFileManifest {
   bool get isEmpty => entries.isEmpty;
 
   static ServerFileManifest fromJson(Map<String, dynamic> o) {
-    final List<ServerFileEntry> entries = <ServerFileEntry>[];
-    for (final dynamic raw in (o['dirs'] as List? ?? <dynamic>[])) {
-      if (raw is String) {
-        entries.add(ServerFileEntry(path: raw, size: 0, modified: null, isDir: true));
-      }
+    final dynamic rawFiles = o['files'];
+    final dynamic rawDirs = o['dirs'];
+    if (rawFiles is! List || (rawDirs != null && rawDirs is! List)) {
+      throw const FormatException('File manifest has no valid files/dirs arrays');
     }
-    for (final dynamic raw in (o['files'] as List? ?? <dynamic>[])) {
-      if (raw is Map) {
-        entries.add(ServerFileEntry.fromJson(Map<String, dynamic>.from(raw), isDir: false));
+
+    final List<ServerFileEntry> entries = <ServerFileEntry>[];
+    final Set<String> seen = <String>{};
+    for (final dynamic raw in (rawDirs as List? ?? <dynamic>[])) {
+      if (raw is! String || !_isSafeServerRelativePath(raw) || !seen.add(raw)) {
+        throw const FormatException('File manifest contains an unsafe or duplicate directory path');
+      }
+      entries.add(ServerFileEntry(path: raw, size: 0, modified: null, isDir: true));
+    }
+    for (final dynamic raw in rawFiles) {
+      if (raw is! Map) throw const FormatException('File manifest contains a malformed file entry');
+      final ServerFileEntry entry = ServerFileEntry.fromJson(Map<String, dynamic>.from(raw), isDir: false);
+      if (!_isSafeServerRelativePath(entry.path) || !seen.add(entry.path)) {
+        throw const FormatException('File manifest contains an unsafe or duplicate file path');
+      }
+      entries.add(entry);
+    }
+    final Set<String> filePaths = entries.where((ServerFileEntry entry) => !entry.isDir).map((ServerFileEntry entry) => entry.path).toSet();
+    final Set<String> dirPaths = entries.where((ServerFileEntry entry) => entry.isDir).map((ServerFileEntry entry) => entry.path).toSet();
+    if (dirPaths.any(filePaths.contains)) {
+      throw const FormatException('Manifest declares one path as both a file and directory');
+    }
+    for (final String path in filePaths) {
+      int slash = path.lastIndexOf('/');
+      while (slash >= 0) {
+        if (filePaths.contains(path.substring(0, slash))) {
+          throw const FormatException('Manifest file path is nested below another file');
+        }
+        slash = path.lastIndexOf('/', slash - 1);
       }
     }
     entries.sort((ServerFileEntry a, ServerFileEntry b) => a.path.compareTo(b.path));
+    final dynamic schema = o['schema'];
+    if (schema != null && schema != 1) throw const FormatException('Unsupported file manifest schema');
+    if (o['truncated'] != null && o['truncated'] is! bool) {
+      throw const FormatException('Manifest truncated flag is invalid');
+    }
     final dynamic stamp = o['generatedAt'];
-    return ServerFileManifest(
-      entries: entries,
-      generatedAt: stamp == null ? null : DateTime.tryParse(stamp.toString())?.toLocal(),
-      truncated: o['truncated'] == true,
-    );
+    final DateTime? generatedAt = stamp == null ? null : DateTime.tryParse(stamp.toString())?.toLocal();
+    if (stamp != null && generatedAt == null) {
+      throw const FormatException('File manifest generatedAt is not a valid timestamp');
+    }
+    return ServerFileManifest(entries: entries, generatedAt: generatedAt, truncated: o['truncated'] == true);
   }
 }
 
@@ -117,6 +182,31 @@ class ServerFilesView extends StatefulWidget {
   State<ServerFilesView> createState() => _ServerFilesViewState();
 }
 
+enum _FilesIssueKind {
+  workflowRunning,
+  serverNotStarted,
+  manifestMissingAfterSuccess,
+  workflowFailed,
+  workflowUnavailable,
+  contentsDenied,
+  actionsDenied,
+  authRequired,
+  rateLimit,
+  networkError,
+  timeout,
+  invalidManifest,
+  apiError,
+}
+
+class _FilesIssue {
+  const _FilesIssue(this.kind, {this.run, this.status, this.detail = ''});
+
+  final _FilesIssueKind kind;
+  final WorkflowRun? run;
+  final int? status;
+  final String detail;
+}
+
 class _ServerFilesViewState extends State<ServerFilesView> {
   final TextEditingController _search = TextEditingController();
   String _path = '';
@@ -126,7 +216,9 @@ class _ServerFilesViewState extends State<ServerFilesView> {
   ServerFileManifest? _manifest;
   Map<String, String> _snapshot = <String, String>{}; // path -> base64 contents
   bool _loading = true;
-  String? _error;
+  bool _refreshing = false;
+  _FilesIssue? _problem;
+  String? _snapshotWarning;
   bool _busy = false;
 
   @override
@@ -138,7 +230,23 @@ class _ServerFilesViewState extends State<ServerFilesView> {
   @override
   void didUpdateWidget(covariant ServerFilesView oldWidget) {
     super.didUpdateWidget(oldWidget);
-    if (oldWidget.active != widget.active && widget.active && _manifest == null) _load();
+    final bool serverChanged = oldWidget.config.id != widget.config.id ||
+        oldWidget.config.repoOwner != widget.config.repoOwner ||
+        oldWidget.config.repoName != widget.config.repoName ||
+        oldWidget.config.defaultBranch != widget.config.defaultBranch;
+    if (serverChanged) {
+      _path = '';
+      _manifest = null;
+      _snapshot = <String, String>{};
+      _problem = null;
+      _snapshotWarning = null;
+      _loading = true;
+      WidgetsBinding.instance.addPostFrameCallback((_) {
+        if (mounted) _load(withSnapshot: true);
+      });
+    } else if (oldWidget.active != widget.active && widget.active && _manifest == null) {
+      _load(withSnapshot: true);
+    }
   }
 
   @override
@@ -148,56 +256,256 @@ class _ServerFilesViewState extends State<ServerFilesView> {
   }
 
   Future<void> _load({bool withSnapshot = false}) async {
+    if (!mounted) return;
     setState(() {
       _loading = _manifest == null;
-      _error = null;
+      _refreshing = true;
+      _problem = null;
+      _snapshotWarning = null;
     });
     final AppState state = AppScope.read(context);
     try {
-      final String text = await state.api.getFileText(widget.config.repoOwner, widget.config.repoName, Provisioner.manifestPath, branch: widget.config.defaultBranch);
+      final String text = await state.api.getFileText(
+        widget.config.repoOwner,
+        widget.config.repoName,
+        Provisioner.manifestPath,
+        branch: widget.config.defaultBranch,
+      );
       final dynamic decoded = jsonDecode(text);
-      if (decoded is! Map) throw ApiException(500, L10n.t('filesUnavailableShort'));
+      if (decoded is! Map) throw const FormatException('Manifest response is not a JSON object');
       final ServerFileManifest manifest = ServerFileManifest.fromJson(Map<String, dynamic>.from(decoded));
       Map<String, String> snapshot = _snapshot;
-      if (withSnapshot || snapshot.isEmpty) {
-        snapshot = await _readSnapshot();
-      }
+      if (withSnapshot || snapshot.isEmpty) snapshot = await _readSnapshot();
       if (!mounted) return;
       setState(() {
         _manifest = manifest;
         _snapshot = snapshot;
         _loading = false;
+        _problem = null;
       });
     } on ApiException catch (error) {
+      final _FilesIssue issue = error.status == 404
+          ? await _diagnoseMissingManifest(state)
+          : _issueFor(error, workflowCheck: false);
       if (!mounted) return;
       setState(() {
-        _error = error.status == 404 ? L10n.t('filesNoManifestYet') : Fmt.error(error);
+        _problem = issue;
+        _loading = false;
+      });
+    } on TimeoutException {
+      if (!mounted) return;
+      setState(() {
+        _problem = const _FilesIssue(_FilesIssueKind.timeout);
+        _loading = false;
+      });
+    } on SocketException {
+      if (!mounted) return;
+      setState(() {
+        _problem = const _FilesIssue(_FilesIssueKind.networkError);
+        _loading = false;
+      });
+    } on FormatException {
+      if (!mounted) return;
+      setState(() {
+        _problem = const _FilesIssue(_FilesIssueKind.invalidManifest);
         _loading = false;
       });
     } catch (error) {
       if (!mounted) return;
       setState(() {
-        _error = Fmt.error(error);
+        _problem = _issueFor(error, workflowCheck: false);
         _loading = false;
       });
+    } finally {
+      if (mounted) setState(() => _refreshing = false);
     }
+  }
+
+  Future<_FilesIssue> _diagnoseMissingManifest(AppState state) async {
+    try {
+      final List<WorkflowRun> runs = await state.api.listRuns(
+        widget.config.repoOwner,
+        widget.config.repoName,
+        workflow: Provisioner.workflowFile,
+      );
+      runs.sort((WorkflowRun a, WorkflowRun b) => b.createdAt.compareTo(a.createdAt));
+      for (final WorkflowRun run in runs) {
+        if (run.isActive) return _FilesIssue(_FilesIssueKind.workflowRunning, run: run);
+      }
+      if (runs.isEmpty) return const _FilesIssue(_FilesIssueKind.serverNotStarted);
+      final WorkflowRun latest = runs.first;
+      if (latest.isCompleted && latest.conclusion == 'success') {
+        return _FilesIssue(_FilesIssueKind.manifestMissingAfterSuccess, run: latest);
+      }
+      if (latest.isCompleted) return _FilesIssue(_FilesIssueKind.workflowFailed, run: latest);
+      return _FilesIssue(_FilesIssueKind.workflowRunning, run: latest);
+    } catch (error) {
+      return _issueFor(error, workflowCheck: true);
+    }
+  }
+
+  _FilesIssue _issueFor(Object error, {required bool workflowCheck}) {
+    if (error is ApiException) {
+      if (error.status == 401) return const _FilesIssue(_FilesIssueKind.authRequired, status: 401);
+      if (error.status == 403 && error.message.toLowerCase().contains('rate limit')) {
+        return _FilesIssue(_FilesIssueKind.rateLimit, status: 403, detail: error.message);
+      }
+      if (error.status == 403) {
+        return _FilesIssue(
+          workflowCheck ? _FilesIssueKind.actionsDenied : _FilesIssueKind.contentsDenied,
+          status: 403,
+        );
+      }
+      if (error.status == 404 && workflowCheck) {
+        return _FilesIssue(_FilesIssueKind.workflowUnavailable, status: 404);
+      }
+      return _FilesIssue(_FilesIssueKind.apiError, status: error.status, detail: error.message);
+    }
+    if (error is TimeoutException) return const _FilesIssue(_FilesIssueKind.timeout);
+    if (error is SocketException) return const _FilesIssue(_FilesIssueKind.networkError);
+    if (error is FormatException) return const _FilesIssue(_FilesIssueKind.invalidManifest);
+    return _FilesIssue(_FilesIssueKind.apiError, detail: Fmt.error(error));
+  }
+
+  String _issueTitle(_FilesIssue issue) {
+    switch (issue.kind) {
+      case _FilesIssueKind.workflowRunning:
+        return L10n.t('filesWorkflowRunningTitle');
+      case _FilesIssueKind.serverNotStarted:
+        return L10n.t('filesServerNotStartedTitle');
+      case _FilesIssueKind.manifestMissingAfterSuccess:
+        return L10n.t('filesManifestMissingTitle');
+      case _FilesIssueKind.workflowFailed:
+        return L10n.t('filesWorkflowFailedTitle');
+      case _FilesIssueKind.workflowUnavailable:
+        return L10n.t('filesWorkflowUnavailableTitle');
+      case _FilesIssueKind.contentsDenied:
+      case _FilesIssueKind.actionsDenied:
+        return L10n.t('filesPermissionDeniedTitle');
+      case _FilesIssueKind.authRequired:
+        return L10n.t('filesAuthRequiredTitle');
+      case _FilesIssueKind.rateLimit:
+        return L10n.t('filesRateLimitTitle');
+      case _FilesIssueKind.networkError:
+        return L10n.t('filesNetworkErrorTitle');
+      case _FilesIssueKind.timeout:
+        return L10n.t('filesTimeoutTitle');
+      case _FilesIssueKind.invalidManifest:
+        return L10n.t('filesInvalidManifestTitle');
+      case _FilesIssueKind.apiError:
+        return L10n.t('filesApiErrorTitle');
+    }
+  }
+
+  String _issueBody(_FilesIssue issue) {
+    final WorkflowRun? run = issue.run;
+    switch (issue.kind) {
+      case _FilesIssueKind.workflowRunning:
+        return L10n.f('filesWorkflowRunningBody', <String, String>{
+          'run': run == null ? '—' : '#${run.id}',
+          'status': run?.status ?? 'unknown',
+        });
+      case _FilesIssueKind.serverNotStarted:
+        return L10n.t('filesServerNotStartedBody');
+      case _FilesIssueKind.manifestMissingAfterSuccess:
+        return L10n.f('filesManifestMissingAfterSuccessBody', <String, String>{
+          'run': run == null ? '—' : '#${run.id}',
+          'status': run?.conclusion ?? 'success',
+        });
+      case _FilesIssueKind.workflowFailed:
+        return L10n.f('filesWorkflowFailedBody', <String, String>{
+          'run': run == null ? '—' : '#${run.id}',
+          'status': run?.conclusion ?? run?.status ?? 'unknown',
+        });
+      case _FilesIssueKind.workflowUnavailable:
+        return L10n.t('filesWorkflowUnavailableBody');
+      case _FilesIssueKind.contentsDenied:
+        return L10n.t('filesContentsPermissionBody');
+      case _FilesIssueKind.actionsDenied:
+        return L10n.t('filesActionsPermissionBody');
+      case _FilesIssueKind.authRequired:
+        return L10n.t('filesAuthRequiredBody');
+      case _FilesIssueKind.rateLimit:
+        return L10n.t('filesRateLimitBody');
+      case _FilesIssueKind.networkError:
+        return L10n.t('filesNetworkErrorBody');
+      case _FilesIssueKind.timeout:
+        return L10n.t('filesTimeoutBody');
+      case _FilesIssueKind.invalidManifest:
+        return L10n.t('filesInvalidManifestBody');
+      case _FilesIssueKind.apiError:
+        return L10n.f('filesApiErrorBody', <String, String>{
+          'status': issue.status?.toString() ?? '—',
+          'detail': issue.detail.isEmpty ? L10n.t('unknown') : issue.detail,
+        });
+    }
+  }
+
+  Widget _issueWidget(_FilesIssue issue) {
+    final String body = _issueBody(issue);
+    if (issue.kind == _FilesIssueKind.workflowRunning || issue.kind == _FilesIssueKind.serverNotStarted) {
+      return EmptyState(
+        title: _issueTitle(issue),
+        body: body,
+        icon: issue.kind == _FilesIssueKind.workflowRunning ? Icons.sync_rounded : Icons.dns_rounded,
+        actionLabel: L10n.t('retry'),
+        onAction: () => _load(withSnapshot: true),
+        compact: true,
+      );
+    }
+    return ErrorState(
+      title: _issueTitle(issue),
+      message: body,
+      onRetry: () => _load(withSnapshot: true),
+      retryLabel: L10n.t('retry'),
+    );
   }
 
   Future<Map<String, String>> _readSnapshot() async {
     final AppState state = AppScope.read(context);
     try {
-      final String text = await state.api.getFileText(widget.config.repoOwner, widget.config.repoName, 'nova-craft/snapshot.json', branch: widget.config.defaultBranch);
+      final String text = await state.api.getFileText(
+        widget.config.repoOwner,
+        widget.config.repoName,
+        'nova-craft/snapshot.json',
+        branch: widget.config.defaultBranch,
+      );
       final dynamic decoded = jsonDecode(text);
-      if (decoded is Map && decoded['files'] is Map) {
-        final Map<String, String> out = <String, String>{};
-        (decoded['files'] as Map).forEach((dynamic key, dynamic value) {
-          out[key.toString()] = value.toString();
-        });
-        return out;
+      if (decoded is! Map || decoded['schema'] != 1 || decoded['files'] is! Map || decoded['truncated'] is! bool) {
+        throw const FormatException('Snapshot response does not match the supported schema');
       }
+      final dynamic generatedAt = decoded['generatedAt'];
+      if (generatedAt is! String || DateTime.tryParse(generatedAt) == null) {
+        throw const FormatException('Snapshot generation timestamp is invalid');
+      }
+      final Map<String, String> out = <String, String>{};
+      int totalEncodedBytes = 0;
+      (decoded['files'] as Map).forEach((dynamic key, dynamic value) {
+        if (key is! String || key.length > 4096 || value is! String || !_isSafeServerRelativePath(key)) {
+          throw const FormatException('Snapshot contains an unsafe path or invalid content');
+        }
+        if (out.length >= 150 || value.length > 87384 || totalEncodedBytes + value.length > 4 * 1024 * 1024) {
+          throw const FormatException('Snapshot exceeds the supported file count or size');
+        }
+        final List<int> bytes = base64Decode(value);
+        if (bytes.length > 64 * 1024) throw const FormatException('Snapshot file exceeds the supported size');
+        totalEncodedBytes += value.length;
+        out[key] = value;
+      });
+      _snapshotWarning = decoded['truncated'] == true ? 'filesSnapshotTruncated' : null;
+      return out;
+    } on ApiException catch (error) {
+      _snapshotWarning = error.status == 404
+          ? 'filesSnapshotMissing'
+          : (error.status == 401 ? 'filesSnapshotAuthRequired' : (error.status == 403 ? 'filesSnapshotPermission' : 'filesSnapshotUnavailable'));
+    } on TimeoutException {
+      _snapshotWarning = 'filesSnapshotTimeout';
+    } on SocketException {
+      _snapshotWarning = 'filesSnapshotNetwork';
+    } on FormatException {
+      _snapshotWarning = 'filesSnapshotMalformed';
     } catch (_) {
-      // No snapshot yet (fresh server) — editing stays unavailable until the
-      // runner publishes one, and the UI says so.
+      _snapshotWarning = 'filesSnapshotUnavailable';
     }
     return <String, String>{};
   }
@@ -318,6 +626,10 @@ class _ServerFilesViewState extends State<ServerFilesView> {
   /// Stopped-server edits go through the published snapshot, which the runner
   /// re-applies before the next start.
   Future<void> _saveSnapshotFile(String path, String content) async {
+    if (!_isSafeServerRelativePath(path)) {
+      showNovaToast(context, L10n.t('pathOutsideRoot'), kind: ToastKind.error);
+      return;
+    }
     final AppState state = AppScope.read(context);
     setState(() => _busy = true);
     try {
@@ -388,6 +700,10 @@ class _ServerFilesViewState extends State<ServerFilesView> {
     );
     final String parent = entry.path.contains('/') ? entry.path.substring(0, entry.path.lastIndexOf('/')) : '';
     if (next == null || next.isEmpty || next == entry.name || !mounted) return;
+    if (next.contains('/') || next.contains(String.fromCharCode(92)) || next == '.' || next == '..') {
+      showNovaToast(context, L10n.t('pathOutsideRoot'), kind: ToastKind.error);
+      return;
+    }
     await _queue(<String, dynamic>{
       'op': 'rename',
       'path': entry.path,
@@ -414,6 +730,10 @@ class _ServerFilesViewState extends State<ServerFilesView> {
       },
     );
     if (name == null || name.isEmpty || !mounted) return;
+    if (name.contains('/') || name.contains(String.fromCharCode(92)) || name == '.' || name == '..') {
+      showNovaToast(context, L10n.t('pathOutsideRoot'), kind: ToastKind.error);
+      return;
+    }
     await _queue(<String, dynamic>{
       'op': 'mkdir',
       'path': _path.isEmpty ? name : '$_path/$name',
@@ -433,7 +753,12 @@ class _ServerFilesViewState extends State<ServerFilesView> {
       showNovaToast(context, L10n.t('fileTooLarge'), kind: ToastKind.error);
       return;
     }
-    final String target = _path.isEmpty ? file.name : '$_path/${file.name}';
+    final String safeName = Validation.sanitizeFileUploadName(file.name);
+    if (!_isSafeServerRelativePath(safeName) || safeName.contains('/')) {
+      showNovaToast(context, L10n.t('pathOutsideRoot'), kind: ToastKind.error);
+      return;
+    }
+    final String target = _path.isEmpty ? safeName : '$_path/$safeName';
     await _queue(<String, dynamic>{
       'op': 'write',
       'path': target,
@@ -442,6 +767,13 @@ class _ServerFilesViewState extends State<ServerFilesView> {
   }
 
   Future<void> _queue(Map<String, dynamic> op) async {
+    for (final String key in <String>['path', 'dest']) {
+      final dynamic value = op[key];
+      if (value is String && !_isSafeServerRelativePath(value)) {
+        showNovaToast(context, L10n.t('pathOutsideRoot'), kind: ToastKind.error);
+        return;
+      }
+    }
     final AppState state = AppScope.read(context);
     setState(() => _busy = true);
     try {
@@ -554,14 +886,14 @@ class _ServerFilesViewState extends State<ServerFilesView> {
                     Text(L10n.t('navFiles'), style: NovaTextStyles.heading(22, p.text)),
                     Text(
                       manifest?.generatedAt == null
-                          ? L10n.t('filesWaitingForRun')
+                          ? (_problem == null ? L10n.t('filesWaitingForRun') : _issueTitle(_problem!))
                           : L10n.f('filesSyncedAt', <String, String>{'time': Fmt.relative(manifest!.generatedAt)}),
                       style: NovaTextStyles.caption(p.textDim),
                     ),
                   ],
                 ),
               ),
-              if (_busy)
+              if (_busy || _refreshing)
                 const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
               else
                 NovaIconButton(icon: Icons.refresh_rounded, size: 34, iconSize: 17, tooltip: L10n.t('refresh'), onTap: () => _load(withSnapshot: true)),
@@ -617,36 +949,83 @@ class _ServerFilesViewState extends State<ServerFilesView> {
           ),
         ),
         const SizedBox(height: 8),
+        if (manifest != null)
+          Padding(
+            padding: const EdgeInsets.symmetric(horizontal: NovaSpace.page),
+            child: Text(L10n.t('filesStorageNotice'), style: NovaTextStyles.caption(p.textDim)),
+          ),
+        if (manifest?.truncated == true)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(NovaSpace.page, 6, NovaSpace.page, 0),
+            child: InfoBanner(body: L10n.t('filesManifestTruncated'), icon: Icons.warning_amber_rounded, color: p.warning, dense: true),
+          ),
+        if (_snapshotWarning != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(NovaSpace.page, 6, NovaSpace.page, 0),
+            child: InfoBanner(body: L10n.t(_snapshotWarning!), icon: Icons.info_outline_rounded, color: p.warning, dense: true),
+          ),
+        if (_problem != null && manifest != null)
+          Padding(
+            padding: const EdgeInsets.fromLTRB(NovaSpace.page, 6, NovaSpace.page, 0),
+            child: InfoBanner(
+              title: _issueTitle(_problem!),
+              body: L10n.f('filesStaleManifestBody', <String, String>{
+                'time': Fmt.relative(manifest.generatedAt),
+                'detail': _issueBody(_problem!),
+              }),
+              icon: Icons.cloud_off_rounded,
+              color: p.warning,
+              actionLabel: L10n.t('retry'),
+              onAction: () => _load(withSnapshot: true),
+              dense: true,
+            ),
+          ),
+        const SizedBox(height: 8),
         Expanded(
           child: _loading
               ? const Padding(padding: EdgeInsets.all(NovaSpace.page), child: SkeletonList(count: 6, cardHeight: 54))
-              : _error != null
-                  ? ErrorState(message: _error!, onRetry: () => _load(withSnapshot: true))
-                  : manifest == null || children.isEmpty
+              : _problem != null && manifest == null
+                  ? _issueWidget(_problem!)
+                  : manifest == null
                       ? EmptyState(
-                          title: L10n.t('filesEmptyTitle'),
-                          body: L10n.t('filesEmptyBody'),
+                          title: L10n.t('filesUnavailableShort'),
+                          body: L10n.t('filesServerNotStartedBody'),
                           icon: Icons.folder_open_rounded,
+                          actionLabel: L10n.t('retry'),
+                          onAction: () => _load(withSnapshot: true),
                           compact: true,
                         )
-                      : RefreshIndicator(
-                          color: p.primaryBright,
-                          backgroundColor: p.cardHigh,
-                          onRefresh: () => _load(withSnapshot: true),
-                          child: ListView.separated(
-                            padding: const EdgeInsets.fromLTRB(NovaSpace.page, 0, NovaSpace.page, 130),
-                            itemCount: children.length,
-                            separatorBuilder: (BuildContext c, int i) => const SizedBox(height: 6),
-                            itemBuilder: (BuildContext context, int index) {
-                              final ServerFileEntry entry = children[index];
-                              return _FileRow(
-                                entry: entry,
-                                onTap: () => _openEntry(entry),
-                                onLongPress: () => _showDetails(entry),
-                              );
-                            },
-                          ),
-                        ),
+                      : children.isEmpty
+                          ? EmptyState(
+                              title: _search.text.trim().isNotEmpty
+                                  ? L10n.t('filesNoMatchesTitle')
+                                  : (_path.isEmpty ? L10n.t('filesEmptyTitle') : L10n.t('filesFolderEmptyTitle')),
+                              body: _search.text.trim().isNotEmpty
+                                  ? L10n.t('filesNoMatchesBody')
+                                  : (_path.isEmpty ? L10n.t('filesEmptyBody') : L10n.t('filesFolderEmptyBody')),
+                              icon: _search.text.trim().isNotEmpty ? Icons.search_off_rounded : Icons.folder_open_rounded,
+                              actionLabel: _path.isEmpty ? null : L10n.t('filesBackToServerData'),
+                              onAction: _path.isEmpty ? null : () => setState(() => _path = ''),
+                              compact: true,
+                            )
+                          : RefreshIndicator(
+                              color: p.primaryBright,
+                              backgroundColor: p.cardHigh,
+                              onRefresh: () => _load(withSnapshot: true),
+                              child: ListView.separated(
+                                padding: const EdgeInsets.fromLTRB(NovaSpace.page, 0, NovaSpace.page, 130),
+                                itemCount: children.length,
+                                separatorBuilder: (BuildContext c, int i) => const SizedBox(height: 6),
+                                itemBuilder: (BuildContext context, int index) {
+                                  final ServerFileEntry entry = children[index];
+                                  return _FileRow(
+                                    entry: entry,
+                                    onTap: () => _openEntry(entry),
+                                    onLongPress: () => _showDetails(entry),
+                                  );
+                                },
+                              ),
+                            ),
         ),
         if (manifest != null)
           Padding(

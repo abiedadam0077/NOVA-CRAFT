@@ -99,7 +99,7 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
       if (!state.ok) {
         setState(() {
           _agent = null;
-          _error = _explain(state.error);
+          _error = Fmt.playitError(state.error);
         });
         return;
       }
@@ -110,19 +110,6 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
     } finally {
       if (mounted) setState(() => _checking = false);
     }
-  }
-
-  String _explain(String raw) {
-    final String value = raw.toLowerCase();
-    if (value.contains('invalidagentkey') || value.contains('unauthorized') || value.contains('401')) {
-      return L10n.t('playitKeyRejected');
-    }
-    if (value.contains('requiresverifiedaccount')) return L10n.t('playitNeedsVerifiedAccount');
-    if (value.contains('requiresplayitpremium')) return L10n.t('playitNeedsPremium');
-    if (value.contains('timeout') || value.contains('socket') || value.contains('failed host lookup')) {
-      return L10n.t('playitNetworkError');
-    }
-    return L10n.t('playitNetworkError');
   }
 
   Future<void> _save() async {

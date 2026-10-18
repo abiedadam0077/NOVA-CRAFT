@@ -87,6 +87,102 @@ void main() {
       expect(unknownOrigin.localPort, isNull);
     });
 
+    test('decodes the versioned AgentRunDataV1 fields used by Playit official source', () async {
+      final PlayitApi api = PlayitApi(
+        client: MockClient((http.Request request) async => http.Response(
+              jsonEncode(<String, dynamic>{
+                'status': 'success',
+                'data': <String, dynamic>{
+                  'agent_id': 'agent-7',
+                  'tunnels': <Map<String, dynamic>>[
+                    <String, dynamic>{
+                      'id': 'tunnel-7',
+                      'internal_id': 7,
+                      'name': 'Java',
+                      'display_address': 'real.playit.gg:25565',
+                      'port_type': 'tcp',
+                      'port_count': 1,
+                      'tunnel_type': 'minecraft-java',
+                      'tunnel_type_display': 'Minecraft Java',
+                      'agent_config': <String, dynamic>{
+                        'fields': <Map<String, String>>[
+                          <String, String>{'name': 'local_ip', 'value': '127.0.0.1'},
+                          <String, String>{'name': 'local_port', 'value': '25565'},
+                        ],
+                      },
+                      'disabled_reason': null,
+                    },
+                  ],
+                  'pending': <dynamic>[],
+                  'notices': <dynamic>[],
+                  'permissions': <String, dynamic>{
+                    'is_self_managed': false,
+                    'has_premium': false,
+                    'account_status': 'verified',
+                  },
+                },
+              }),
+              200,
+            )),
+      );
+      final PlayitAgentState state = await api.agentState('secret-value');
+      api.dispose();
+      expect(state.ok, isTrue);
+      expect(state.agentId, 'agent-7');
+      expect(state.tunnels.single.id, 'tunnel-7');
+      expect(state.tunnels.single.address, 'real.playit.gg:25565');
+      expect(state.tunnels.single.localIp, '127.0.0.1');
+      expect(state.tunnels.single.localPort, 25565);
+    });
+
+    test('malformed rundata schema is not treated as a genuine empty tunnel list', () async {
+      final PlayitApi api = PlayitApi(
+        client: MockClient((http.Request request) async => http.Response(
+              jsonEncode(<String, dynamic>{
+                'status': 'success',
+                'data': <String, dynamic>{'agent_id': 'agent-7', 'tunnels': 'not-an-array'},
+              }),
+              200,
+            )),
+      );
+      final PlayitAgentState state = await api.agentState('secret-value');
+      api.dispose();
+      expect(state.ok, isFalse);
+      expect(state.error, 'invalid-rundata-schema');
+      expect(state.tunnels, isEmpty);
+    });
+
+    test('a malformed tunnel entry is an API error rather than a missing Tunnel', () async {
+      final PlayitApi api = PlayitApi(
+        client: MockClient((http.Request request) async => http.Response(
+              jsonEncode(<String, dynamic>{
+                'status': 'success',
+                'data': <String, dynamic>{'agent_id': 'agent-7', 'tunnels': <dynamic>[null]},
+              }),
+              200,
+            )),
+      );
+      final PlayitAgentState state = await api.agentState('secret-value');
+      api.dispose();
+      expect(state.ok, isFalse);
+      expect(state.error, 'invalid-rundata-tunnel');
+    });
+
+    test('API errors never echo the submitted key into a user-visible diagnostic', () async {
+      const String secret = 'secret-value';
+      final PlayitApi api = PlayitApi(
+        client: MockClient((http.Request request) async => http.Response(
+              jsonEncode(<String, dynamic>{'status': 'error', 'error': 'rejected $secret'}),
+              401,
+            )),
+      );
+      final PlayitAgentState state = await api.agentState(secret);
+      api.dispose();
+      expect(state.ok, isFalse);
+      expect(state.error, isNot(contains(secret)));
+      expect(state.error, contains('[REDACTED]'));
+    });
+
     test('reads rundata through the official agent-key endpoint without creating tunnels', () async {
       final List<http.Request> seen = <http.Request>[];
       final http.Client client = MockClient((http.Request request) async {

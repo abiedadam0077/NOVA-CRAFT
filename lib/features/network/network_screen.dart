@@ -276,7 +276,7 @@ class _NetworkViewState extends State<NetworkView> {
           }
         } else {
           _playitState = null;
-          _playitError = result.error == 'missing-secret' ? L10n.t('playitSecretMissing') : result.error;
+          _playitError = Fmt.playitError(result.error);
         }
       });
     } catch (error) {
@@ -471,8 +471,9 @@ class _NetworkViewState extends State<NetworkView> {
   String? _agentDiagnosticLabel(ServerRuntime runtime) {
     switch (runtime.agentDiagnostic) {
       case 'invalid_secret':
-      case 'invalid_secret_format':
         return L10n.t('playitAgentBadSecret');
+      case 'invalid_secret_format':
+        return L10n.t('playitAgentBadSecretFormat');
       case 'network_unreachable':
         return L10n.t('playitAgentNetworkFailure');
       case 'account_agent_limit':
@@ -493,6 +494,28 @@ class _NetworkViewState extends State<NetworkView> {
         return L10n.t('playitAgentStillStarting');
       case 'secret_missing':
         return L10n.t('playitAgentNotStarted');
+      case 'waiting_for_minecraft':
+      case 'minecraft_port_not_listening':
+        return L10n.t('playitAgentWaitingForMinecraft');
+      default:
+        return null;
+    }
+  }
+
+  String? _tunnelDiagnosticLabel(ServerRuntime runtime) {
+    switch (runtime.tunnelDiagnostic) {
+      case 'rundata_network_error':
+        return L10n.t('playitRundataNetworkError');
+      case 'rundata_unauthorized':
+        return L10n.t('playitRundataUnauthorized');
+      case 'rundata_forbidden':
+        return L10n.t('playitRundataForbidden');
+      case 'rundata_http_error':
+        return L10n.t('playitRundataHttpError');
+      case 'rundata_empty':
+        return L10n.t('playitRundataEmpty');
+      case 'rundata_parse_error':
+        return L10n.t('playitRundataMalformed');
       default:
         return null;
     }
@@ -808,6 +831,15 @@ class _NetworkViewState extends State<NetworkView> {
                 ),
                 if (widget.runtime!.gamePort != null)
                   InfoRow(label: L10n.t('playitGamePort'), value: '${widget.runtime!.gamePort}', monospace: true),
+                if (int.tryParse(widget.runtime!.agentExitCode) != null)
+                  InfoRow(label: L10n.t('playitAgentExitCode'), value: widget.runtime!.agentExitCode, monospace: true),
+                if (widget.runtime!.tunnelDiagnostic.isNotEmpty)
+                  InfoRow(label: L10n.t('playitDiagnosticCode'), value: widget.runtime!.tunnelDiagnostic, monospace: true),
+                if (_tunnelDiagnosticLabel(widget.runtime!) != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(_tunnelDiagnosticLabel(widget.runtime!)!, style: NovaTextStyles.caption(p.warning)),
+                  ),
                 if (widget.runtime!.tunnelName.isNotEmpty)
                   InfoRow(label: L10n.t('playitTunnelName'), value: widget.runtime!.tunnelName),
                 if (widget.runtime!.tunnelProtocol.isNotEmpty)
@@ -824,6 +856,18 @@ class _NetworkViewState extends State<NetworkView> {
                   Padding(
                     padding: const EdgeInsets.only(top: 6),
                     child: Text(_agentDiagnosticLabel(widget.runtime!)!, style: NovaTextStyles.caption(p.warning)),
+                  ),
+                if (widget.runtime!.tunnelMessage.trim().isNotEmpty &&
+                    <String>{'error', 'not_created', 'unsupported', 'address_unavailable', 'server_port_not_listening', 'origin_mismatch', 'selection_required'}
+                        .contains(widget.runtime!.tunnelStatus))
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: InfoBanner(
+                      body: L10n.f('playitTunnelDetails', <String, String>{'detail': widget.runtime!.tunnelMessage}),
+                      icon: Icons.info_outline_rounded,
+                      color: widget.runtime!.tunnelStatus == 'error' ? p.danger : p.warning,
+                      dense: true,
+                    ),
                   ),
                 for (final String reason in widget.runtime!.tunnelOfflineReasons)
                   Padding(

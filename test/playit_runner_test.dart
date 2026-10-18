@@ -45,6 +45,43 @@ void main() {
       expect(env, contains('TUNNEL_ADDR=\'\''));
     });
 
+    test('malformed rundata JSON and a missing tunnels array are errors, never no-Tunnel states', () async {
+      await input.writeAsString('{not-json');
+      final ProcessResult malformedJson = await Process.run(
+        'python3',
+        <String>[parser.path, 'parse', input.path, output.path, 'JAVA', ''],
+      );
+      expect(malformedJson.exitCode, 0, reason: malformedJson.stderr);
+      final String jsonEnv = await output.readAsString();
+      expect(jsonEnv, contains('TUNNEL_STATE=error'));
+      expect(jsonEnv, contains('TUNNEL_DIAGNOSTIC=rundata_invalid_json'));
+      expect(jsonEnv, isNot(contains('TUNNEL_STATE=not_created')));
+
+      final String schemaEnv = await parse(<String, dynamic>{
+        'status': 'success',
+        'data': <String, dynamic>{'agent_id': 'agent-1', 'tunnels': 'not-a-list'},
+      });
+      expect(schemaEnv, contains('TUNNEL_STATE=error'));
+      expect(schemaEnv, contains('TUNNEL_DIAGNOSTIC=rundata_invalid_schema'));
+      expect(schemaEnv, isNot(contains('TUNNEL_STATE=not_created')));
+
+      final String missingAgent = await parse(<String, dynamic>{
+        'status': 'success',
+        'data': <String, dynamic>{'tunnels': <dynamic>[]},
+      });
+      expect(missingAgent, contains('TUNNEL_DIAGNOSTIC=rundata_invalid_schema'));
+      expect(missingAgent, isNot(contains('TUNNEL_STATE=not_created')));
+
+      final String malformedTunnel = await parse(<String, dynamic>{
+        'status': 'success',
+        'data': <String, dynamic>{
+          'agent_id': 'agent-1',
+          'tunnels': <dynamic>[<String, dynamic>{'id': 'missing-protocol'}],
+        },
+      });
+      expect(malformedTunnel, contains('TUNNEL_DIAGNOSTIC=rundata_invalid_schema'));
+    });
+
     test('a tunnel with the wrong edition or transport is unsupported', () async {
       final String env = await parse(<String, dynamic>{
         'status': 'success',
@@ -53,6 +90,7 @@ void main() {
           'tunnels': <Map<String, dynamic>>[
             <String, dynamic>{
               'id': 'wrong',
+              'name': 'Wrong transport',
               'tunnel_type': 'minecraft-java',
               'port_type': 'udp',
               'display_address': 'wrong.playit.gg:19132',
@@ -72,6 +110,7 @@ void main() {
           'tunnels': <Map<String, dynamic>>[
             <String, dynamic>{
               'id': 'java-1',
+              'name': 'Java server',
               'tunnel_type': 'minecraft-java',
               'port_type': 'tcp',
               'display_address': '',
@@ -121,6 +160,7 @@ void main() {
             'tunnels': <Map<String, dynamic>>[
               <String, dynamic>{
                 'id': 'java-1',
+                'name': 'Java server',
                 'tunnel_type': 'minecraft-java',
                 'port_type': 'tcp',
                 'display_address': 'real.playit.gg:25565',

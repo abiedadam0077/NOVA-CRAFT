@@ -754,7 +754,6 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
     final List<PlayitTunnel> options = _selectablePlayitTunnels;
     final List<PlayitTunnel> selectedItems = options.where((PlayitTunnel tunnel) => tunnel.id == _selectedTunnelId).toList();
     final PlayitTunnel? selected = selectedItems.isEmpty ? null : selectedItems.first;
-    final bool missingSecret = _playitLoadError == 'missing-secret';
     return Column(
       crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
@@ -802,7 +801,7 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
           )
         else if (_playitLoadError != null)
           InfoBanner(
-            body: missingSecret ? L10n.t('playitSecretMissing') : L10n.t('playitNetworkError'),
+            body: Fmt.playitError(_playitLoadError ?? ''),
             icon: Icons.info_outline_rounded,
             color: p.warning,
             dense: true,

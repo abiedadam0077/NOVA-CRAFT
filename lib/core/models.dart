@@ -648,9 +648,13 @@ class ServerRuntime {
     this.agentId = '',
     this.agentStatus = 'unknown',
     this.agentDiagnostic = '',
+    this.agentExitCode = 'not_started',
     this.playitSecretStatus = 'unknown',
     this.serverPortStatus = 'unknown',
     this.agentLogTail = '',
+    this.tunnelDiagnostic = '',
+    this.fileManifestStatus = 'unknown',
+    this.fileSnapshotStatus = 'unknown',
   });
 
   final String phase; // starting | ready | stopping | stopped | failed | unknown
@@ -681,9 +685,15 @@ class ServerRuntime {
   final String agentId;
   final String agentStatus; // not_started | starting | connected | failed | stopped
   final String agentDiagnostic;
+  /// Numeric process exit status when the official Agent exited naturally.
+  /// Non-numeric values describe a lifecycle state (running/not_started).
+  final String agentExitCode;
   final String playitSecretStatus; // saved | missing | unknown
   final String serverPortStatus; // listening | not_listening | unknown
   final String agentLogTail; // bounded and redacted by the runner
+  final String tunnelDiagnostic;
+  final String fileManifestStatus; // published | generation_failed | publish_failed | unknown
+  final String fileSnapshotStatus;
 
   DateTime? get updatedAtDate => DateTime.tryParse(updatedAt)?.toLocal();
 
@@ -732,9 +742,13 @@ class ServerRuntime {
       agentId: o['agentId']?.toString() ?? '',
       agentStatus: o['agentStatus']?.toString() ?? 'unknown',
       agentDiagnostic: o['agentDiagnostic']?.toString() ?? '',
+      agentExitCode: o['agentExitCode']?.toString() ?? 'not_started',
       playitSecretStatus: o['playitSecretStatus']?.toString() ?? 'unknown',
       serverPortStatus: o['serverPortStatus']?.toString() ?? 'unknown',
       agentLogTail: o['agentLogTail']?.toString() ?? '',
+      tunnelDiagnostic: o['tunnelDiagnostic']?.toString() ?? '',
+      fileManifestStatus: o['fileManifestStatus']?.toString() ?? 'unknown',
+      fileSnapshotStatus: o['fileSnapshotStatus']?.toString() ?? 'unknown',
     );
   }
 }

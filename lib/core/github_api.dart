@@ -12,9 +12,14 @@ import 'models.dart';
 /// Thin GitHub REST client. Only public identifiers are used for the OAuth
 /// Device Flow: no client secret, no private key, no redirect URI.
 class GitHubApi {
-  GitHubApi({http.Client? client}) : _client = client ?? http.Client();
+  GitHubApi({http.Client? client, Duration timeout = defaultTimeout})
+      : _client = client ?? http.Client(),
+        _timeout = timeout;
+
+  static const Duration defaultTimeout = Duration(seconds: 40);
 
   final http.Client _client;
+  final Duration _timeout;
   String? accessToken;
   String? lastRateLimitRemaining;
 
@@ -22,8 +27,6 @@ class GitHubApi {
   /// branch that actually exists; assuming `main` breaks older accounts (and
   /// any repository whose default branch is `master` or custom).
   final Map<String, String> _defaultBranches = <String, String>{};
-
-  static const Duration _timeout = Duration(seconds: 40);
 
   Map<String, String> _headers({bool json = true, String? token, bool acceptRaw = false}) {
     final Map<String, String> headers = <String, String>{
@@ -112,10 +115,10 @@ class GitHubApi {
       final dynamic data = _decode(await _send('GET', base.replace(queryParameters: query).toString()));
       final List<dynamic>? values = data is List
           ? data
-          : data is Map && data[arrayKey] is List
+          : data is Map && arrayKey != null && data[arrayKey] is List
               ? data[arrayKey] as List<dynamic>
               : null;
-      if (values == null) break;
+      if (values == null) throw ApiException(502, 'Malformed GitHub collection response');
       all.addAll(values);
       if (values.length < 100) break;
     }
@@ -517,11 +520,22 @@ class GitHubApi {
     final String url = workflow == null
         ? '${AppConfig.githubApi}/repos/$owner/$repo/actions/runs?per_page=20'
         : '${AppConfig.githubApi}/repos/$owner/$repo/actions/workflows/$workflow/runs?per_page=20';
-    final dynamic data = _decode(await _send('GET', url));
+    dynamic data;
+    try {
+      data = _decode(await _send('GET', url));
+    } on FormatException {
+      throw ApiException(502, 'Malformed GitHub Actions workflow-runs JSON response');
+    }
+    if (data is! Map || data['workflow_runs'] is! List) {
+      throw ApiException(502, 'Malformed GitHub Actions workflow-runs response');
+    }
     final List<WorkflowRun> out = <WorkflowRun>[];
-    if (data is Map && data['workflow_runs'] is List) {
-      for (final dynamic raw in data['workflow_runs'] as List) {
-        if (raw is Map) out.add(WorkflowRun.fromJson(Map<String, dynamic>.from(raw)));
+    for (final dynamic raw in data['workflow_runs'] as List) {
+      if (raw is! Map) throw ApiException(502, 'Malformed GitHub Actions workflow-run entry');
+      try {
+        out.add(WorkflowRun.fromJson(Map<String, dynamic>.from(raw)));
+      } on TypeError {
+        throw ApiException(502, 'Malformed GitHub Actions workflow-run fields');
       }
     }
     return out;

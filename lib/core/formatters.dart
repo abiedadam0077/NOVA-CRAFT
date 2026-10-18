@@ -72,6 +72,23 @@ class Fmt {
   static String shortSha(String sha) => sha.length >= 7 ? sha.substring(0, 7) : sha;
 
   /// Maps transport/API failures to a localized, non-leaky message.
+  static String playitError(String raw) {
+    final String value = raw.toLowerCase();
+    if (value.contains('missing-secret')) return L10n.t('playitSecretMissing');
+    if (value.contains('invalidagentkey') || value.contains('unauthorized') || value.contains('http-401') || value.contains('rejected')) {
+      return L10n.t('playitKeyRejected');
+    }
+    if (value.contains('http-403') || value.contains('forbidden')) return L10n.t('playitPermissionDenied');
+    if (value.contains('http-429') || value.contains('rate-limited')) return L10n.t('playitRateLimited');
+    if (value.contains('requiresverifiedaccount')) return L10n.t('playitNeedsVerifiedAccount');
+    if (value.contains('requiresplayitpremium')) return L10n.t('playitNeedsPremium');
+    if (value.contains('timeout')) return L10n.t('playitTimeout');
+    if (value.contains('invalid-json') || value.contains('invalid-rundata') || value.contains('unexpected-response')) {
+      return L10n.t('playitInvalidResponse');
+    }
+    return L10n.t('playitNetworkError');
+  }
+
   static String error(Object error) {
     if (error is ApiException) {
       if (error.status == 401) return L10n.t('errorUnauthorized');
