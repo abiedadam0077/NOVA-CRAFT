@@ -93,20 +93,32 @@ jobs:
             flutter build apk --release --android-skip-build-dependency-validation --no-shrink 2>&1 | tee /tmp/build.log
             cp build/app/outputs/flutter-apk/app-release.apk delivery/NOVA-CRAFT-1.0.0-release.apk
             SIGNING_STORE="$NOVA_KEYSTORE_PATH"
+            SIGNING_STORE_TYPE="PKCS12"
             SIGNING_STORE_PASSWORD="$NOVA_KEYSTORE_PASSWORD"
             SIGNING_KEY_ALIAS="$NOVA_KEY_ALIAS"
             SIGNING_KEY_PASSWORD="$NOVA_KEY_PASSWORD"
             BUILD_KIND="release"
           else
             echo "Release keystore secrets are unavailable in this repository."
-            echo "Delivering AOT release builds signed with the CI debug key; no new release key is generated."
+            echo "The APKs will be non-production debug-signed builds; no production release key is configured."
             flutter build apk --release --android-skip-build-dependency-validation --no-shrink 2>&1 | tee /tmp/build.log
             cp build/app/outputs/flutter-apk/app-release.apk delivery/NOVA-CRAFT-1.0.0-release-debugsigned.apk
             flutter build apk --release --android-skip-build-dependency-validation --no-shrink --split-per-abi 2>&1 | tee -a /tmp/build.log
             if [ -f build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ]; then
               cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk delivery/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk
             fi
-            SIGNING_STORE="$HOME/.android/debug.keystore"
+            echo "Creating an ephemeral CI debug keystore for this non-production debug-signed APK."
+            SIGNING_STORE="$RUNNER_TEMP/nova-debug.keystore"
+            SIGNING_STORE_TYPE="JKS"
+            keytool -genkeypair -v \
+              -keystore "$SIGNING_STORE" \
+              -storetype JKS \
+              -storepass android \
+              -keypass android \
+              -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US" \
+              -noprompt
             SIGNING_STORE_PASSWORD="android"
             SIGNING_KEY_ALIAS="androiddebugkey"
             SIGNING_KEY_PASSWORD="android"
@@ -123,6 +135,7 @@ jobs:
             "$ZIPALIGN" -f -p 4 "$APK" "$ALIGNED"
             "$APKSIGNER" sign \
               --ks "$SIGNING_STORE" \
+              --ks-type "$SIGNING_STORE_TYPE" \
               --ks-key-alias "$SIGNING_KEY_ALIAS" \
               --ks-pass env:NOVA_APK_KS_PASS \
               --key-pass env:NOVA_APK_KEY_PASS \
