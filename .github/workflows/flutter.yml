@@ -1,0 +1,180 @@
+name: Flutter Build & Delivery
+
+on:
+  push:
+    branches: ["arena/9ee1fafe-nova-craft", "arena/5a6ddfcf-nova-craft", "main"]
+    paths-ignore: ["README.md", "docs/**"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: flutter-delivery-${{ github.ref }}
+  cancel-in-progress: false
+
+env:
+  FLUTTER_VERSION: "3.35.7"
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 60
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Java 17
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: "17"
+
+      - name: Set up Flutter
+        uses: subosito/flutter-action@v2
+        with:
+          flutter-version: ${{ env.FLUTTER_VERSION }}
+          channel: stable
+          cache: true
+
+      - name: Flutter version
+        run: flutter --version
+
+      - name: Ensure Android SDK platform 36
+        run: |
+          SDKMANAGER="$ANDROID_HOME/cmdline-tools/latest/bin/sdkmanager"
+          if [ -x "$SDKMANAGER" ]; then
+            yes | "$SDKMANAGER" --licenses > /dev/null 2>&1 || true
+            "$SDKMANAGER" "platforms;android-36" > /dev/null
+          fi
+
+      - name: Resolve Dart packages
+        run: flutter pub get
+
+      - name: Static analysis
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          flutter analyze 2>&1 | tee /tmp/analyze.log
+          STATUS=${PIPESTATUS[0]}
+          if [ "$STATUS" -ne 0 ]; then
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -f body="$(tail -c 55000 /tmp/analyze.log || true)" || true
+            exit "$STATUS"
+          fi
+
+      - name: Unit and widget tests
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          flutter test --reporter expanded 2>&1 | tee /tmp/test.log
+          STATUS=${PIPESTATUS[0]}
+          if [ "$STATUS" -ne 0 ]; then
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -f body="$(tail -c 55000 /tmp/test.log || true)" || true
+            exit "$STATUS"
+          fi
+
+      - name: Build APK
+        env:
+          NOVA_KEYSTORE_BASE64: ${{ secrets.NOVA_KEYSTORE_BASE64 }}
+          NOVA_KEYSTORE_PASSWORD: ${{ secrets.NOVA_KEYSTORE_PASSWORD }}
+          NOVA_KEY_ALIAS: ${{ secrets.NOVA_KEY_ALIAS || 'nova-craft' }}
+          NOVA_KEY_PASSWORD: ${{ secrets.NOVA_KEY_PASSWORD || secrets.NOVA_KEYSTORE_PASSWORD }}
+          NOVA_KEYSTORE_PATH: ${{ runner.temp }}/nova-release.p12
+        run: |
+          set -euo pipefail
+          mkdir -p delivery
+          if [ -n "${NOVA_KEYSTORE_BASE64:-}" ] && [ -n "${NOVA_KEYSTORE_PASSWORD:-}" ]; then
+            printf '%s' "$NOVA_KEYSTORE_BASE64" | base64 --decode > "$NOVA_KEYSTORE_PATH"
+            flutter build apk --release --android-skip-build-dependency-validation --no-shrink 2>&1 | tee /tmp/build.log
+            cp build/app/outputs/flutter-apk/app-release.apk delivery/NOVA-CRAFT-1.0.0-release.apk
+            echo "BUILD_KIND=release" >> "$GITHUB_ENV"
+          else
+            echo "Release keystore secrets are unavailable in this repository."
+            echo "Delivering AOT release builds signed with the CI debug key; no new release key is generated."
+            flutter build apk --release --android-skip-build-dependency-validation --no-shrink 2>&1 | tee /tmp/build.log
+            cp build/app/outputs/flutter-apk/app-release.apk delivery/NOVA-CRAFT-1.0.0-release-debugsigned.apk
+            flutter build apk --release --android-skip-build-dependency-validation --no-shrink --split-per-abi 2>&1 | tee -a /tmp/build.log
+            if [ -f build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ]; then
+              cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk delivery/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk
+            fi
+            echo "BUILD_KIND=release (debug-signed)" >> "$GITHUB_ENV"
+          fi
+
+      - name: Verify APK package, signature and checksum
+        run: |
+          set -euo pipefail
+          AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt | sort -V | tail -1)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          : > delivery/package-info.txt
+          : > delivery/signature-verification.txt
+          for APK in delivery/*.apk; do
+            echo "== $APK" | tee -a delivery/package-info.txt
+            "$AAPT" dump badging "$APK" | head -6 | tee -a delivery/package-info.txt
+            grep -q "package: name='io.github.abiedadam0077.novacraft'" delivery/package-info.txt
+            grep -q "versionName='1.0.0'" delivery/package-info.txt
+            echo "== $APK" | tee -a delivery/signature-verification.txt
+            "$APKSIGNER" verify --verbose --print-certs "$APK" | tee -a delivery/signature-verification.txt
+          done
+          (cd delivery && sha256sum *.apk > SHA256SUMS.txt)
+          du -h delivery/*.apk
+
+      - name: Upload verified APK and reports
+        uses: actions/upload-artifact@v4
+        with:
+          name: nova-craft-flutter-${{ github.run_id }}
+          path: |
+            delivery/
+            build/app/outputs/flutter-apk/
+          if-no-files-found: error
+          retention-days: 30
+
+      - name: Publish directly downloadable APK
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          TAG="flutter-apk-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          mapfile -d '' FILES < <(find delivery -maxdepth 1 -type f -size +0c -print0)
+          SUMMARY="delivery/TEST-REPORT.md"
+          {
+            echo "# NOVA CRAFT ${BUILD_KIND} build"
+            echo
+            echo "- Commit: ${GITHUB_SHA}"
+            echo "- Flutter: ${FLUTTER_VERSION}"
+            echo "- Package: io.github.abiedadam0077.novacraft"
+            echo "- Tests: \`flutter analyze\` + \`flutter test\` passed before this build."
+            echo "- Artifact: $(basename "$(find delivery -name '*.apk' | head -1)")"
+            echo
+            echo '```'
+            cat delivery/package-info.txt
+            echo '```'
+          } > "$SUMMARY"
+          gh release create "$TAG" "${FILES[@]}" \
+            --target "$GITHUB_SHA" \
+            --prerelease \
+            --title "NOVA CRAFT 1.0.0 (${BUILD_KIND} APK)" \
+            --notes-file "$SUMMARY"
+          ASSET=$(basename "$(find delivery -name '*arm64*.apk' | head -1)")
+          if [ -z "$ASSET" ]; then ASSET=$(basename "$(find delivery -name '*.apk' | head -1)"); fi
+          URL="https://github.com/${GITHUB_REPOSITORY}/releases/download/${TAG}/${ASSET}"
+          echo "Download: $URL" >> "$GITHUB_STEP_SUMMARY"
+          cat "$SUMMARY" >> "$GITHUB_STEP_SUMMARY"
+          mkdir -p "$RUNNER_TEMP/download-check"
+          gh release download "$TAG" --pattern '*.apk' --dir "$RUNNER_TEMP/download-check"
+          (cd "$RUNNER_TEMP/download-check" && sha256sum -c "$GITHUB_WORKSPACE/delivery/SHA256SUMS.txt")
+          echo "$URL" > delivery/DOWNLOAD-LINK.txt
+
+      - name: Diagnostic on failure
+        if: failure()
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          echo "Build failed. Inspect the analyze/test output above." >> "$GITHUB_STEP_SUMMARY"
+          if [ -s /tmp/build.log ]; then
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -f body="$(tail -c 55000 /tmp/build.log || true)" || true
+          fi

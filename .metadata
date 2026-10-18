@@ -1,0 +1,12 @@
+version:
+  revision: "3.35.7"
+  channel: "stable"
+project_type: app
+migration:
+  platforms:
+    - platform: root
+      create_revision: 3.35.7
+      base_revision: 3.35.7
+    - platform: android
+      create_revision: 3.35.7
+      base_revision: 3.35.7
