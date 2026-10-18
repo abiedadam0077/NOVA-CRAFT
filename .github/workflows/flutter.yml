@@ -133,12 +133,15 @@ jobs:
             ALIGNED="${APK%.apk}.aligned.apk"
             SIGNED="${APK%.apk}.signed.apk"
             "$ZIPALIGN" -f -p 4 "$APK" "$ALIGNED"
+            # The manifest remains minSdk 26; lower this signing floor only so
+            # apksigner emits the legacy JAR/v1 signature as well as v2/v3.
             "$APKSIGNER" sign \
               --ks "$SIGNING_STORE" \
               --ks-type "$SIGNING_STORE_TYPE" \
               --ks-key-alias "$SIGNING_KEY_ALIAS" \
               --ks-pass env:NOVA_APK_KS_PASS \
               --key-pass env:NOVA_APK_KEY_PASS \
+              --min-sdk-version 1 \
               --v1-signing-enabled true \
               --v2-signing-enabled true \
               --v3-signing-enabled true \
