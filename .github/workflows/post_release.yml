@@ -15,13 +15,11 @@ jobs:
         with:
           channel: 'stable'
       - run: flutter pub get
-      - run: flutter build apk --release
-      - name: Commit APK
+      - run: flutter build apk --release > build_log.txt 2>&1 || true
+      - name: Commit Log
         run: |
           git config --global user.name "bot"
           git config --global user.email "bot@bot.com"
-          cp build/app/outputs/flutter-apk/app-release.apk nova-craft-final.apk
-          sha256sum nova-craft-final.apk > final_sha256.txt
-          git add nova-craft-final.apk final_sha256.txt
-          git commit -m "Add final apk" || true
+          git add build_log.txt
+          git commit -m "Build log" || true
           git push origin ${{ github.ref }} || true
