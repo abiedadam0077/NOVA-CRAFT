@@ -141,7 +141,7 @@ jobs:
               --ks-key-alias "$SIGNING_KEY_ALIAS" \
               --ks-pass env:NOVA_APK_KS_PASS \
               --key-pass env:NOVA_APK_KEY_PASS \
-              --min-sdk-version 1 \
+              --min-sdk-version 19 \
               --v1-signing-enabled true \
               --v2-signing-enabled true \
               --v3-signing-enabled true \
@@ -173,7 +173,7 @@ jobs:
             grep -q "versionName='1.0.0'" delivery/package-info.txt
             echo "== $APK" | tee -a delivery/signature-verification.txt
             VERIFY_REPORT=$(mktemp)
-            "$APKSIGNER" verify --verbose --print-certs "$APK" 2>&1 | tee "$VERIFY_REPORT" | tee -a delivery/signature-verification.txt
+            "$APKSIGNER" verify --verbose --min-sdk-version 19 --print-certs "$APK" 2>&1 | tee "$VERIFY_REPORT" | tee -a delivery/signature-verification.txt
             grep -Fq 'Verified using v1 scheme (JAR signing): true' "$VERIFY_REPORT"
             grep -Fq 'Verified using v2 scheme (APK Signature Scheme v2): true' "$VERIFY_REPORT"
             "$ZIPALIGN" -c -v 4 "$APK" | tee -a delivery/signature-verification.txt
