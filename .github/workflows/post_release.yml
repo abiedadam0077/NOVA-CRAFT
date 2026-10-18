@@ -12,4 +12,9 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           gh release download flutter-apk-39085129294-1 --pattern "SHA256SUMS.txt" || true
-          cat SHA256SUMS.txt || true
+          git config --global user.name "bot"
+          git config --global user.email "bot@bot.com"
+          git pull --rebase origin ${{ github.ref }} || true
+          git add SHA256SUMS.txt || true
+          git commit -m "Fetch sha256 via commit" || true
+          git push origin ${{ github.ref }} || true
