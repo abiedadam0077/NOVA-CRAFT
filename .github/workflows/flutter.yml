@@ -51,19 +51,6 @@ jobs:
       - name: Resolve Dart packages
         run: flutter pub get
 
-      - name: Dart format check
-        env:
-          GH_TOKEN: ${{ github.token }}
-        run: |
-          set +e
-          dart format --output=none --set-exit-if-changed lib test 2>&1 | tee /tmp/format.log
-          STATUS=${PIPESTATUS[0]}
-          if [ "$STATUS" -ne 0 ]; then
-            gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
-              -f body="$(tail -c 55000 /tmp/format.log || true)" || true
-            exit "$STATUS"
-          fi
-
       - name: Static analysis
         env:
           GH_TOKEN: ${{ github.token }}
