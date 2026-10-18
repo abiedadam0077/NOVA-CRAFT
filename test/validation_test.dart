@@ -30,6 +30,15 @@ void main() {
       expect(Validation.parsePositiveInt('abc'), isNull);
     });
 
+    test('Playit agent secrets are locally checked as non-empty hex', () {
+      expect(Validation.validPlayitSecret('aabb0011'), isTrue);
+      expect(Validation.validPlayitSecret(' aAbB0011 '), isTrue);
+      expect(Validation.validPlayitSecret(''), isFalse);
+      expect(Validation.validPlayitSecret('abc'), isFalse);
+      expect(Validation.validPlayitSecret('not-a-key'), isFalse);
+      expect(Validation.validPlayitSecret('aa bb'), isFalse);
+    });
+
     test('path helpers normalise user input', () {
       expect(Validation.safePath('/server/../etc'), isNull);
       expect(Validation.safePath('server/world'), 'server/world');

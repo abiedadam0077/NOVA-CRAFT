@@ -26,12 +26,12 @@ After onboarding and GitHub sign-in, select a repository where the NOVA CRAFT Gi
 
 Playit is optional. To use it:
 
-1. Create a Playit Agent and create the needed Tunnel manually in the Playit dashboard. NOVA CRAFT never creates a Tunnel.
-2. Enter the Agent `SECRET_KEY`; the app checks it through Playit's official agent endpoint and stores it in GitHub Actions Secrets. The key itself is not displayed in status or logs.
-3. Select a matching Tunnel when there are multiple choices. A sole matching Tunnel may be selected automatically; ambiguous or missing IDs are not guessed.
-4. The runner reads the address actually reported by the Playit agent. The UI only reports a connection after a real server cycle and game-protocol probe. If Playit has not returned an address, enter a manually verified address or continue without public connectivity.
+1. Create a Playit Agent and copy its `SECRET_KEY`. Save the key in NOVA CRAFT; the app writes it as the repository's encrypted GitHub Actions Secret. Saving it is **not** proof that the Agent has started or connected.
+2. Start the server cycle from NOVA CRAFT. The GitHub Runner downloads the pinned official `playitd` binary, verifies its SHA-256, and starts it once with `--secret-path` and `--platform-docker`; the secret is kept in a temporary mode-0600 file and is not printed.
+3. Wait for the runner status to report **Agent connected**. Only then create a Minecraft Java Tunnel manually in Playit, choose that connected Agent, select TCP, and target `127.0.0.1:25565`. The app/runner never creates a Tunnel.
+4. The runner reports **Connection ready** only after the local Minecraft Java Server List Ping succeeds and the public address reported by Playit answers a real game-protocol ping. Missing, unsupported, or unallocated tunnels remain separate states. If the official Agent API does not return an address, enter a known `host:port` manually in Network settings; that override is for the app's direct ping only and does not make the runner claim that its Playit Tunnel is connected.
 
-Playit may be skipped during setup and linked later from Network settings. An unlinked or unavailable Tunnel is shown as unknown/missing/error, not as a successful connection.
+Playit may be skipped during setup and linked later from Network settings. The screen distinguishes Secret saved, Agent starting/connected/failed, Tunnel state, local server-port status, and externally verified connection. Runner Agent logs are bounded and redacted before publication. The GitHub Actions server cycle is temporary rather than 24/7 hosting.
 
 ## Server lifecycle
 

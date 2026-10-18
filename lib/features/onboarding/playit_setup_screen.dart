@@ -7,6 +7,7 @@ import '../../core/formatters.dart';
 import '../../core/models.dart';
 import '../../core/playit_api.dart';
 import '../../core/strings.dart';
+import '../../core/validation.dart';
 import '../../design/theme.dart';
 import '../../design/tokens.dart';
 import '../../design/widgets/background.dart';
@@ -19,9 +20,9 @@ import '../../design/widgets/nav.dart';
 import '../../design/widgets/surfaces.dart';
 import '../../state/app_state.dart';
 
-/// Step three of first run: verify the user's Playit key and store it as a
-/// GitHub Actions Secret in the repository selected in the preceding step.
-/// Tunnel creation stays in the Playit dashboard and is never automated here.
+/// Step three of first run: store the user's Playit key as a GitHub Actions
+/// Secret. Agent connectivity is a separate runner status; saving a key does
+/// not require the Agent to already be online. Tunnel creation stays manual.
 class PlayitSetupScreen extends StatefulWidget {
   const PlayitSetupScreen({super.key, required this.repo, required this.onDone});
 
@@ -74,10 +75,7 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
   }
 
   String? _validate(String value) {
-    final String v = value.trim();
-    if (v.isEmpty) return L10n.t('playitSecretInvalid');
-    if (v.contains(RegExp(r'\s'))) return L10n.t('playitSecretInvalid');
-    return null;
+    return Validation.validPlayitSecret(value) ? null : L10n.t('playitSecretInvalid');
   }
 
   /// Asks Playit whether this key is real. The key is never logged.
@@ -128,7 +126,10 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
   }
 
   Future<void> _save() async {
-    if (_agent == null || !_agent!.ok) return;
+    if (_validate(_candidateSecret) != null) {
+      setState(() => _error = L10n.t('playitSecretInvalid'));
+      return;
+    }
     setState(() {
       _saving = true;
       _error = null;
@@ -218,6 +219,8 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
                           _Step(number: 2, text: L10n.t('playitSetupStep2')),
                           const SizedBox(height: 12),
                           _Step(number: 3, text: L10n.t('playitSetupStep3')),
+                          const SizedBox(height: 12),
+                          _Step(number: 4, text: L10n.t('playitSetupStep4')),
                         ],
                       ),
                     ),
@@ -286,8 +289,16 @@ class _PlayitSetupScreenState extends State<PlayitSetupScreen> {
                     const SizedBox(height: 16),
                     if (!verified) ...<Widget>[
                       NovaButton(
-                        label: L10n.t('playitVerifyKey'),
+                        label: L10n.t('playitSaveSecret'),
+                        icon: Icons.lock_rounded,
+                        loading: _saving,
+                        onPressed: _saving || _loadingStored ? null : _save,
+                      ),
+                      const SizedBox(height: 8),
+                      NovaButton(
+                        label: L10n.t('playitCheckAgent'),
                         icon: Icons.shield_outlined,
+                        variant: NovaButtonVariant.secondary,
                         loading: _checking,
                         onPressed: _checking || _loadingStored ? null : _verify,
                       ),

@@ -643,7 +643,14 @@ class ServerRuntime {
     this.tunnelId = '',
     this.tunnelProtocol = '',
     this.tunnelOfflineReasons = const <String>[],
+    this.tunnelLocalIp = '',
+    this.tunnelLocalPort,
     this.agentId = '',
+    this.agentStatus = 'unknown',
+    this.agentDiagnostic = '',
+    this.playitSecretStatus = 'unknown',
+    this.serverPortStatus = 'unknown',
+    this.agentLogTail = '',
   });
 
   final String phase; // starting | ready | stopping | stopped | failed | unknown
@@ -654,7 +661,7 @@ class ServerRuntime {
   final String version;
   final String motd;
   final int? latencyMs;
-  final String tunnelStatus; // connected | connecting | allocated | missing | disabled | error | unknown
+  final String tunnelStatus; // connected | connecting | allocated | not_created | unsupported | address_unavailable | server_port_not_listening | origin_mismatch | selection_required | disabled | error | unknown
   final String tunnelMessage;
   /// Public `host:port` the Playit agent reported. Empty until the agent has
   /// actually been assigned a tunnel — never synthesised.
@@ -669,12 +676,20 @@ class ServerRuntime {
   final String tunnelId;
   final String tunnelProtocol;
   final List<String> tunnelOfflineReasons;
+  final String tunnelLocalIp;
+  final int? tunnelLocalPort;
   final String agentId;
+  final String agentStatus; // not_started | starting | connected | failed | stopped
+  final String agentDiagnostic;
+  final String playitSecretStatus; // saved | missing | unknown
+  final String serverPortStatus; // listening | not_listening | unknown
+  final String agentLogTail; // bounded and redacted by the runner
 
   DateTime? get updatedAtDate => DateTime.tryParse(updatedAt)?.toLocal();
 
   bool get online => ready && phase == 'ready';
   bool get tunnelConnected => tunnelStatus == 'connected';
+  bool get agentConnected => agentStatus == 'connected';
 
   Duration? get uptime {
     final DateTime? start = DateTime.tryParse(cycleStartedAt);
@@ -712,7 +727,14 @@ class ServerRuntime {
       tunnelId: o['tunnelId']?.toString() ?? '',
       tunnelProtocol: o['tunnelProtocol']?.toString() ?? '',
       tunnelOfflineReasons: (o['tunnelOfflineReasons'] as List?)?.map((dynamic e) => e.toString()).toList() ?? const <String>[],
+      tunnelLocalIp: o['tunnelLocalIp']?.toString() ?? '',
+      tunnelLocalPort: numOrNull('tunnelLocalPort'),
       agentId: o['agentId']?.toString() ?? '',
+      agentStatus: o['agentStatus']?.toString() ?? 'unknown',
+      agentDiagnostic: o['agentDiagnostic']?.toString() ?? '',
+      playitSecretStatus: o['playitSecretStatus']?.toString() ?? 'unknown',
+      serverPortStatus: o['serverPortStatus']?.toString() ?? 'unknown',
+      agentLogTail: o['agentLogTail']?.toString() ?? '',
     );
   }
 }

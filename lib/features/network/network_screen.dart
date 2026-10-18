@@ -190,7 +190,7 @@ class _NetworkViewState extends State<NetworkView> {
     final String? stored = await state.store.playitSecret();
     if (!mounted) return;
     final String candidate = _secret.text.trim().isNotEmpty ? _secret.text.trim() : (stored ?? '').trim();
-    if (candidate.isEmpty) {
+    if (!Validation.validPlayitSecret(candidate)) {
       setState(() => _secretError = L10n.t('playitSecretInvalid'));
       return;
     }
@@ -199,17 +199,9 @@ class _NetworkViewState extends State<NetworkView> {
       _secretError = null;
     });
     try {
-      final PlayitApi playit = PlayitApi();
-      late final PlayitAgentState validation;
-      try {
-        validation = await playit.agentState(candidate);
-      } finally {
-        playit.dispose();
-      }
-      if (!validation.ok) {
-        if (mounted) setState(() => _secretError = _explainPlayitError(validation.error));
-        return;
-      }
+      // Saving a GitHub Secret is deliberately independent from checking the
+      // live Agent. The next server workflow starts the Agent; connectivity is
+      // then reported by status.json and can be checked from this screen.
       await state.installPlayitSecret(_config, provided: candidate);
       if (!mounted) return;
       _secret.clear();
@@ -219,23 +211,11 @@ class _NetworkViewState extends State<NetworkView> {
         _checkedSecret = true;
       });
       showNovaToast(context, L10n.t('playitLinked'), kind: ToastKind.success);
-      _checkPlayit();
     } catch (error) {
       if (mounted) setState(() => _secretError = Fmt.error(error));
     } finally {
       if (mounted) setState(() => _linkingPlayit = false);
     }
-  }
-
-  String _explainPlayitError(String raw) {
-    final String value = raw.toLowerCase();
-    if (value.contains('invalidagentkey') || value.contains('unauthorized') || value.contains('http-401')) {
-      return L10n.t('playitKeyRejected');
-    }
-    if (value.contains('timeout') || value.contains('network-error') || value.contains('socket')) {
-      return L10n.t('playitNetworkError');
-    }
-    return L10n.t('playitNetworkError');
   }
 
   Future<void> _test() async {
@@ -319,8 +299,16 @@ class _NetworkViewState extends State<NetworkView> {
     final List<PlayitTunnel> selectable = _selectablePlayitTunnels;
     final bool dirty = (_selectedTunnelId ?? '') != _config.playitTunnelId;
     if (matches.isEmpty) {
+      final PlayitAgentState? state = _playitState;
+      final String body = state == null
+          ? L10n.t('playitNoMatchingTunnel')
+          : (state.tunnels.isEmpty
+              ? L10n.t('playitNoTunnelsYet')
+              : (state.hasUnsupportedTunnels(bedrock: _config.isBedrock)
+                  ? L10n.t('playitTunnelTypeUnsupported')
+                  : L10n.t('playitNoMatchingTunnel')));
       return InfoBanner(
-        body: _playitState?.tunnels.isEmpty == true ? L10n.t('playitNoTunnelsYet') : L10n.t('playitNoMatchingTunnel'),
+        body: body,
         icon: Icons.info_outline_rounded,
         color: p.warning,
         dense: true,
@@ -417,9 +405,9 @@ class _NetworkViewState extends State<NetworkView> {
   Future<void> _reconnect() async {
     final bool ok = await showNovaConfirm(
       context,
-      title: L10n.t('reconnect'),
-      body: L10n.t('restartConfirmBody'),
-      confirmLabel: L10n.t('reconnect'),
+      title: L10n.t(widget.activeRun ? 'reconnect' : 'playitStartServerAgent'),
+      body: L10n.t(widget.activeRun ? 'restartConfirmBody' : 'playitStartServerConfirm'),
+      confirmLabel: L10n.t(widget.activeRun ? 'reconnect' : 'playitStartServerAgent'),
       icon: Icons.sync_rounded,
     );
     if (!ok || !mounted) return;
@@ -434,16 +422,95 @@ class _NetworkViewState extends State<NetworkView> {
     }
   }
 
+  String _agentStatusLabel(ServerRuntime runtime) {
+    switch (runtime.agentStatus) {
+      case 'not_started':
+        return L10n.t('playitAgentNotStarted');
+      case 'starting':
+        return L10n.t('playitAgentStarting');
+      case 'connected':
+        return runtime.phase == 'stopped' ? L10n.t('playitAgentStopped') : L10n.t('playitAgentConnected');
+      case 'failed':
+        return L10n.t('playitAgentFailed');
+      case 'stopped':
+        return L10n.t('playitAgentStopped');
+      default:
+        return L10n.t('unknown');
+    }
+  }
+
+  String _tunnelStatusLabel(ServerRuntime runtime) {
+    switch (runtime.tunnelStatus) {
+      case 'connected':
+        return runtime.online ? L10n.t('playitConnectionReady') : L10n.t('tunnelUnknown');
+      case 'allocated':
+      case 'connecting':
+        return L10n.t('playitTunnelConnecting');
+      case 'missing':
+      case 'not_created':
+        return L10n.t('playitTunnelNotCreated');
+      case 'unsupported':
+        return L10n.t('playitTunnelTypeUnsupported');
+      case 'address_unavailable':
+        return L10n.t('playitTunnelAddressUnavailable');
+      case 'server_port_not_listening':
+        return L10n.t('playitServerPortNotListening');
+      case 'origin_mismatch':
+        return L10n.t('playitTunnelOriginMismatch');
+      case 'selection_required':
+        return L10n.t('playitTunnelSelectionRequired');
+      case 'disabled':
+        return L10n.t('tunnelInactive');
+      case 'error':
+        return L10n.t('playitTunnelError');
+      default:
+        return L10n.t('tunnelUnknown');
+    }
+  }
+
+  String? _agentDiagnosticLabel(ServerRuntime runtime) {
+    switch (runtime.agentDiagnostic) {
+      case 'invalid_secret':
+      case 'invalid_secret_format':
+        return L10n.t('playitAgentBadSecret');
+      case 'network_unreachable':
+        return L10n.t('playitAgentNetworkFailure');
+      case 'account_agent_limit':
+        return L10n.t('playitAgentAccountLimit');
+      case 'agent_download_failed':
+      case 'agent_checksum_failed':
+        return L10n.t('playitAgentDownloadFailure');
+      case 'secure_temp_directory_failed':
+      case 'temp_directory_unavailable':
+      case 'write_secret_failed':
+      case 'write_api_config_failed':
+      case 'create_log_failed':
+      case 'secure_temp_files_failed':
+        return L10n.t('playitAgentTempFileFailure');
+      case 'process_exited':
+        return L10n.t('playitAgentProcessExited');
+      case 'startup_timeout':
+        return L10n.t('playitAgentStillStarting');
+      case 'secret_missing':
+        return L10n.t('playitAgentNotStarted');
+      default:
+        return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = context.nova;
     final bool configured = _host.isNotEmpty;
     final String displayAddress = _effectiveAddress;
     final String addressLabel = L10n.t(_config.isBedrock ? 'bedrockAddress' : 'javaAddress');
-    final bool online = _result?.online ?? false;
+    final bool runnerReady = widget.runtime?.tunnelConnected == true && widget.runtime!.online;
+    final bool online = _result?.online ?? runnerReady;
     final String stateLabel = !configured
         ? L10n.t('tunnelUnknown')
-        : (online ? L10n.t('tunnelActive') : (_result == null ? L10n.t('tunnelUnknown') : L10n.t('tunnelInactive')));
+        : (online
+            ? L10n.t('tunnelActive')
+            : (_result == null && widget.runtime == null ? L10n.t('tunnelUnknown') : L10n.t('tunnelInactive')));
     final Color stateColor = !configured
         ? p.textMuted
         : (online ? p.success : (_result == null ? p.textMuted : p.danger));
@@ -694,8 +761,8 @@ class _NetworkViewState extends State<NetworkView> {
                   const SizedBox(width: 8),
                   Expanded(child: Text(stateLabel, style: NovaTextStyles.bodyStrong(stateColor))),
                   NovaButton(
-                    label: L10n.t('reconnect'),
-                    icon: Icons.sync_rounded,
+                    label: L10n.t(widget.activeRun ? 'reconnect' : 'playitStartServerAgent'),
+                    icon: widget.activeRun ? Icons.sync_rounded : Icons.play_arrow_rounded,
                     size: NovaButtonSize.compact,
                     expand: false,
                     variant: NovaButtonVariant.secondary,
@@ -706,17 +773,58 @@ class _NetworkViewState extends State<NetworkView> {
               if (widget.runtime != null) ...<Widget>[
                 const SizedBox(height: 10),
                 InfoRow(
-                  label: L10n.t('runnerTunnelState'),
-                  value: widget.runtime!.tunnelStatus.isEmpty ? L10n.t('unknown') : widget.runtime!.tunnelStatus,
-                  valueColor: widget.runtime!.tunnelConnected ? p.successBright : p.textMuted,
-                  monospace: true,
+                  label: L10n.t('playitSecretStatus'),
+                  value: widget.runtime!.playitSecretStatus == 'saved'
+                      ? L10n.t('playitSecretSaved')
+                      : (widget.runtime!.playitSecretStatus == 'missing'
+                          ? L10n.t('playitSecretMissingFromRun')
+                          : L10n.t('unknown')),
+                  valueColor: widget.runtime!.playitSecretStatus == 'saved' ? p.successBright : p.warning,
                 ),
+                InfoRow(
+                  label: L10n.t('playitAgentStatus'),
+                  value: _agentStatusLabel(widget.runtime!),
+                  valueColor: widget.runtime!.agentStatus == 'connected'
+                      ? p.successBright
+                      : (widget.runtime!.agentStatus == 'failed' ? p.danger : p.warning),
+                ),
+                InfoRow(
+                  label: L10n.t('playitTunnelStatus'),
+                  value: _tunnelStatusLabel(widget.runtime!),
+                  valueColor: widget.runtime!.tunnelConnected && widget.runtime!.online
+                      ? p.successBright
+                      : (widget.runtime!.tunnelStatus == 'error' || widget.runtime!.tunnelStatus == 'unsupported'
+                          ? p.danger
+                          : p.warning),
+                ),
+                InfoRow(
+                  label: L10n.t('playitServerPortStatus'),
+                  value: widget.runtime!.serverPortStatus == 'listening'
+                      ? L10n.t('playitServerPortListening')
+                      : (widget.runtime!.serverPortStatus == 'not_listening'
+                          ? L10n.t('playitServerPortNotListening')
+                          : L10n.t('unknown')),
+                  valueColor: widget.runtime!.serverPortStatus == 'listening' ? p.successBright : p.warning,
+                ),
+                if (widget.runtime!.gamePort != null)
+                  InfoRow(label: L10n.t('playitGamePort'), value: '${widget.runtime!.gamePort}', monospace: true),
                 if (widget.runtime!.tunnelName.isNotEmpty)
                   InfoRow(label: L10n.t('playitTunnelName'), value: widget.runtime!.tunnelName),
                 if (widget.runtime!.tunnelProtocol.isNotEmpty)
                   InfoRow(label: L10n.t('playitTunnelProtocol'), value: widget.runtime!.tunnelProtocol, monospace: true),
                 if (widget.runtime!.agentId.isNotEmpty)
                   InfoRow(label: L10n.t('playitAgentId'), value: widget.runtime!.agentId, monospace: true),
+                if (widget.runtime!.tunnelLocalIp.isNotEmpty || widget.runtime!.tunnelLocalPort != null)
+                  InfoRow(
+                    label: L10n.t('playitTunnelLocalOrigin'),
+                    value: '${widget.runtime!.tunnelLocalIp}${widget.runtime!.tunnelLocalPort == null ? '' : ':${widget.runtime!.tunnelLocalPort}'}',
+                    monospace: true,
+                  ),
+                if (_agentDiagnosticLabel(widget.runtime!) != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(_agentDiagnosticLabel(widget.runtime!)!, style: NovaTextStyles.caption(p.warning)),
+                  ),
                 for (final String reason in widget.runtime!.tunnelOfflineReasons)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
@@ -725,6 +833,52 @@ class _NetworkViewState extends State<NetworkView> {
                       style: NovaTextStyles.caption(p.warning),
                     ),
                   ),
+                if (_secretPresent && widget.runtime!.agentStatus == 'starting')
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: InfoBanner(
+                      body: L10n.t('playitAgentStillStarting'),
+                      icon: Icons.info_outline_rounded,
+                      color: p.warning,
+                      dense: true,
+                    ),
+                  )
+                else if (_secretPresent &&
+                    widget.runtime!.agentStatus != 'connected' && widget.runtime!.agentStatus != 'failed')
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: InfoBanner(
+                      body: L10n.t('playitStartServerAgentHint'),
+                      icon: Icons.info_outline_rounded,
+                      color: p.warning,
+                      dense: true,
+                    ),
+                  ),
+                if (widget.runtime!.agentLogTail.trim().isNotEmpty)
+                  ExpansionTile(
+                    tilePadding: EdgeInsets.zero,
+                    childrenPadding: EdgeInsets.zero,
+                    title: Text(L10n.t('playitAgentLogTitle'), style: NovaTextStyles.caption(p.textDim)),
+                    children: <Widget>[
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 200),
+                        child: SingleChildScrollView(
+                          child: SelectableText(
+                            widget.runtime!.agentLogTail,
+                            style: NovaTextStyles.mono(11, p.textDim),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+              ] else if (_secretPresent) ...<Widget>[
+                const SizedBox(height: 8),
+                InfoBanner(
+                  body: L10n.t('playitStartServerAgentHint'),
+                  icon: Icons.info_outline_rounded,
+                  color: p.warning,
+                  dense: true,
+                ),
               ],
               if (_playitError != null) ...<Widget>[
                 const SizedBox(height: 8),

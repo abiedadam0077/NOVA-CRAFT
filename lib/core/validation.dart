@@ -39,6 +39,14 @@ class Validation {
     return int.tryParse(trimmed);
   }
 
+  /// Playit's official agent daemon validates SECRET_KEY as a non-empty hex
+  /// string. Validate its shape locally; a running Agent is not required to
+  /// store the credential in GitHub Actions Secrets.
+  static bool validPlayitSecret(String value) {
+    final String secret = value.trim();
+    return secret.isNotEmpty && secret.length.isEven && RegExp(r'^[0-9a-fA-F]+$').hasMatch(secret);
+  }
+
   /// Rejects traversal and empty segments; returns the cleaned relative path.
   static String? safePath(String p) {
     final clean = p.trim().replaceFirst(RegExp(r'^/+'), '');

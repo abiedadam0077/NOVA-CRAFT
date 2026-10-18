@@ -46,6 +46,47 @@ void main() {
       expect(state.tunnelFor(bedrock: true)?.id, 'bedrock-a');
     });
 
+    test('flags incompatible tunnel protocols instead of silently selecting them', () {
+      final PlayitAgentState state = PlayitAgentState(
+        agentId: 'agent',
+        tunnels: <PlayitTunnel>[
+          PlayitTunnel.fromJson(<String, dynamic>{
+            'id': 'wrong-java',
+            'tunnel_type': 'minecraft-java',
+            'port_type': 'udp',
+            'display_address': 'example.playit.gg:19132',
+          }),
+        ],
+      );
+      expect(state.tunnelsFor(bedrock: false), isEmpty);
+      expect(state.hasUnsupportedTunnels(bedrock: false), isTrue);
+    });
+
+    test('reads the configured tunnel origin without inventing a fallback', () {
+      final PlayitTunnel tunnel = PlayitTunnel.fromJson(<String, dynamic>{
+        'id': 'java-origin',
+        'tunnel_type': 'minecraft-java',
+        'port_type': 'tcp',
+        'display_address': 'java.playit.gg:25565',
+        'agent_config': <String, dynamic>{
+          'fields': <Map<String, dynamic>>[
+            <String, dynamic>{'name': 'local_ip', 'value': '127.0.0.1'},
+            <String, dynamic>{'name': 'local_port', 'value': '25565'},
+          ],
+        },
+      });
+      expect(tunnel.localIp, '127.0.0.1');
+      expect(tunnel.localPort, 25565);
+
+      final PlayitTunnel unknownOrigin = PlayitTunnel.fromJson(<String, dynamic>{
+        'id': 'java-unknown',
+        'tunnel_type': 'minecraft-java',
+        'port_type': 'tcp',
+      });
+      expect(unknownOrigin.localIp, isEmpty);
+      expect(unknownOrigin.localPort, isNull);
+    });
+
     test('reads rundata through the official agent-key endpoint without creating tunnels', () async {
       final List<http.Request> seen = <http.Request>[];
       final http.Client client = MockClient((http.Request request) async {

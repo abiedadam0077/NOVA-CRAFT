@@ -13,6 +13,8 @@ class PlayitTunnel {
     required this.protocol,
     required this.address,
     this.disabledReason = '',
+    this.localIp = '',
+    this.localPort,
   });
 
   final String id;
@@ -21,9 +23,14 @@ class PlayitTunnel {
   final String protocol; // tcp | udp | both
   final String address; // host:port, empty until allocated
   final String disabledReason;
+  final String localIp;
+  final int? localPort;
 
   bool get enabled => disabledReason.isEmpty;
   bool get hasAddress => address.trim().isNotEmpty;
+  bool supportsEdition({required bool bedrock}) =>
+      type.trim() == (bedrock ? 'minecraft-bedrock' : 'minecraft-java') &&
+      protocol.trim().toLowerCase() == (bedrock ? 'udp' : 'tcp');
 
   factory PlayitTunnel.fromJson(Map<String, dynamic> o) {
     final dynamic reason = o['disabled_reason'];
@@ -33,6 +40,22 @@ class PlayitTunnel {
     } else if (reason is Map) {
       reasonText = (reason['type'] ?? reason['reason'] ?? '').toString();
     }
+    String localValue(String key) {
+      final dynamic direct = o[key];
+      if (direct != null && direct.toString().isNotEmpty) return direct.toString();
+      final dynamic rawConfig = o['agent_config'];
+      final dynamic rawFields = rawConfig is Map ? rawConfig['fields'] : null;
+      if (rawFields is Map && rawFields[key] != null) return rawFields[key].toString();
+      if (rawFields is List) {
+        for (final dynamic field in rawFields) {
+          if (field is Map && field['name']?.toString() == key) {
+            return (field['value'] ?? field['default_value'] ?? '').toString();
+          }
+        }
+      }
+      return '';
+    }
+
     return PlayitTunnel(
       id: (o['tunnel_id'] ?? o['id'])?.toString() ?? '',
       name: o['name']?.toString() ?? '',
@@ -40,6 +63,8 @@ class PlayitTunnel {
       protocol: o['port_type']?.toString() ?? '',
       address: (o['display_address'] ?? '').toString(),
       disabledReason: reasonText,
+      localIp: localValue('local_ip'),
+      localPort: int.tryParse(localValue('local_port')),
     );
   }
 }
@@ -62,13 +87,15 @@ class PlayitAgentState {
 
   bool get ok => error.isEmpty;
 
-  /// Matching tunnels for the selected edition. A caller must not silently
+  bool hasUnsupportedTunnels({required bool bedrock}) =>
+      tunnels.isNotEmpty && tunnels.every((PlayitTunnel tunnel) => !tunnel.supportsEdition(bedrock: bedrock));
+
+  /// Matching tunnels for the selected edition and transport. A caller must not silently
   /// choose one when several tunnels of the same type exist.
   List<PlayitTunnel> tunnelsFor({required bool bedrock}) {
-    final String want = bedrock ? 'minecraft-bedrock' : 'minecraft-java';
     final Set<String> seenIds = <String>{};
     return tunnels.where((PlayitTunnel tunnel) {
-      if (tunnel.type != want) return false;
+      if (!tunnel.supportsEdition(bedrock: bedrock)) return false;
       if (tunnel.id.isEmpty) return true;
       return seenIds.add(tunnel.id);
     }).toList();
