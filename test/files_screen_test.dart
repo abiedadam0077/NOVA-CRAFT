@@ -81,7 +81,7 @@ Future<AppState> _pumpFiles(
         state: state,
         child: MaterialApp(
           locale: Locale(language),
-          home: const Scaffold(body: ServerFilesView(config: _config)),
+          home: Scaffold(body: ServerFilesView(key: ObjectKey(state.api), config: _config)),
         ),
       ),
     ),
