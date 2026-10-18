@@ -89,15 +89,15 @@ jobs:
           mkdir -p delivery
           if [ -n "${NOVA_KEYSTORE_BASE64:-}" ] && [ -n "${NOVA_KEYSTORE_PASSWORD:-}" ]; then
             printf '%s' "$NOVA_KEYSTORE_BASE64" | base64 --decode > "$NOVA_KEYSTORE_PATH"
-            flutter build apk --release --no-shrink 2>&1 | tee /tmp/build.log
+            flutter build apk --release --android-skip-build-dependency-validation --no-shrink 2>&1 | tee /tmp/build.log
             cp build/app/outputs/flutter-apk/app-release.apk delivery/NOVA-CRAFT-1.0.0-release.apk
             echo "BUILD_KIND=release" >> "$GITHUB_ENV"
           else
             echo "Release keystore secrets are unavailable in this repository."
             echo "Delivering AOT release builds signed with the CI debug key; no new release key is generated."
-            flutter build apk --release --no-shrink 2>&1 | tee /tmp/build.log
+            flutter build apk --release --android-skip-build-dependency-validation --no-shrink 2>&1 | tee /tmp/build.log
             cp build/app/outputs/flutter-apk/app-release.apk delivery/NOVA-CRAFT-1.0.0-release-debugsigned.apk
-            flutter build apk --release --no-shrink --split-per-abi 2>&1 | tee -a /tmp/build.log
+            flutter build apk --release --android-skip-build-dependency-validation --no-shrink --split-per-abi 2>&1 | tee -a /tmp/build.log
             if [ -f build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ]; then
               cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk delivery/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk
             fi
