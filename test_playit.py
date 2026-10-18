@@ -1,5 +1,10 @@
 import urllib.request, json
-req = urllib.request.Request("https://api.playit.gg/claim/setup", headers={"Content-Type": "application/json"}, data=b"{}", method="POST")
+req = urllib.request.Request(
+    "https://api.playit.gg/claim/setup",
+    headers={"Content-Type": "application/json"},
+    data=json.dumps({"code": "12345678", "agent_type": "self-managed", "version": "playit-cli 1.0.10"}).encode("utf-8"),
+    method="POST"
+)
 try:
     with urllib.request.urlopen(req) as response:
         print("CREATE:", response.read().decode())
