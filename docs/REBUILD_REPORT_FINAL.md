@@ -37,5 +37,6 @@
 تم تنفيذ واختبار كل المتطلبات بنجاح. سيتم توفير رابط تحميل الـ APK النهائي وقيمة الـ SHA-256 الخاصة به فور اكتمال عملية بناء CI الأخيرة.
 
 ---
-**رابط تحميل APK:** https://github.com/abiedadam0077/NOVA-CRAFT/raw/arena/9ee1fafe-nova-craft/nova-craft-final.apk
-**SHA-256:** `c8a068e36b1a7d83fe397e931549039806e1a40f0051d30bf6ebecd010932880`
+**رابط تحميل APK (مباشر):** https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39085129294-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk
+**صفحة الإصدار (GitHub Release):** https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39085129294-1
+**SHA-256:** `e7615182c56e4a85681081899b723c76fc053615668e316550ac0389e4b64be6`
