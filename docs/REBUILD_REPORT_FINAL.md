@@ -2,32 +2,32 @@
 
 **التاريخ:** 2026-10-18<br>
 **الفرع:** `arena/9027d464-nova-craft`<br>
-**التزام الكود الذي بُني:** `ee7cc0d6a69e4d7b7b518d71dc198adf8e623e3d`<br>
-**GitHub Actions:** [التشغيل الناجح 39167342497](https://github.com/abiedadam0077/NOVA-CRAFT/actions/runs/39167342497)<br>
-**وسم الإصدار:** `flutter-apk-39167342497-1`<br>
+**التزام الكود الذي بُني:** `a9a8cd31260a51f4d11c5344d2e526775a7ddeeb`<br>
+**GitHub Actions:** [التشغيل الناجح 39172015256](https://github.com/abiedadam0077/NOVA-CRAFT/actions/runs/39172015256)<br>
+**وسم الإصدار:** `flutter-apk-39172015256-1`<br>
 **مرجع المتطلبات:** `NOVA_CRAFT_MASTER_IMPLEMENTATION_BRIEF.md` من المستودع، SHA-1 `5093818629d00df7f041410f002b6bd1cf5ec0ee`.
 
 ## الخلاصة
 
 أُصلح مسار الملفات من مصدر المشكلة: Runner يولّد Manifest فعلياً من مجلد بيانات السيرفر، ينشئ مجلد النشر عند غيابه، وينشره إلى GitHub Contents؛ قارئ التطبيق يتحقق من المخطط والطوابع الزمنية والأحجام والمسارات، ويعرض حالات Workflow/الصلاحيات/الشبكة بدلاً من إظهار قائمة أو اتصال وهمي. كذلك فُصلت حالات حفظ سر Playit عن بدء Agent وTunnel وفحص Minecraft، وأضيف مسار آمن لتحديث ملفات Runner للسيرفرات الأقدم.
 
-اجتاز الكود **`flutter analyze` ومجموعة `flutter test` كاملة** في CI، ثم بُني APK جديد. بعد تشخيص أن الإصدار السابق لا يُظهر v1/JAR، عُدّل التوقيع والتحقق في CI؛ تقرير الإصدار الجديد يؤكد **v1=true وv2=true وv3=true** للحزمتين، كما نجح فحص الحزمة والمحاذاة وSHA-256 وإعادة تنزيل APK المنشور داخل CI. هذا تحقق آلي موثق، لكنه **ليس اختبار اتصال حيّاً بـPlayit أو Minecraft ولا اختبار تثبيت على جهاز/محاكي Android**.
+اجتاز الكود **`flutter analyze` ومجموعة `flutter test` كاملة** في CI، وبُني APK جديد يؤكد تقريره **v1=true وv2=true وv3=true**. كما فُحص سبب تعطل Playit في المستودع الذي أرسله المستخدم: سجل Agent المنقح أظهر `Failed to bind to socket: No such file or directory`؛ عُدّل Runner لاستخدام مقبس IPC داخل مجلد مؤقت خاص، ونجحت اختبارات العقد والتكامل والبناء. لم تُجرَ بعد دورة جديدة في مستودع المستخدم بعد تحديث Runner، لذلك **اتصال Playit/Tunnel بعد الإصلاح لم يُثبت بعد**. لا يوجد أيضاً اختبار تثبيت على جهاز/محاكي Android.
 
 ## التنزيل المباشر للحزم
 
 ### arm64 — موصى به لمعظم أجهزة Android الحديثة
 
-[تنزيل مباشر: NOVA-CRAFT-1.0.0-arm64-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39167342497-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk)<br>
+[تنزيل مباشر: NOVA-CRAFT-1.0.0-arm64-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39172015256-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk)<br>
 الحجم: **25,350,216 بايت**<br>
-SHA-256: `a2c2104bf518c52ab64f24ec116088156c8ca10891bd051aad3a152c10f91614`
+SHA-256: `fead9580c0825a8a5bfddbf13839b11cce1ec468467593524897306af0e9fcf7`
 
 ### APK شامل
 
-[تنزيل مباشر: NOVA-CRAFT-1.0.0-release-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39167342497-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk)<br>
+[تنزيل مباشر: NOVA-CRAFT-1.0.0-release-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39172015256-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk)<br>
 الحجم: **61,518,502 بايت**<br>
-SHA-256: `c7b26c07a20172b5fd4c41c7b372431549975d5b644f41a803cbfe06c3d4761f`
+SHA-256: `9dba6e5b58b2e1040b34e767b1008af96ade55f4b713384928845c55cccbb126`
 
-[صفحة الإصدار وتقارير التحقق](https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39167342497-1) · [SHA256SUMS.txt](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39167342497-1/SHA256SUMS.txt) · [تقرير apksigner](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39167342497-1/signature-verification.txt)
+[صفحة الإصدار وتقارير التحقق](https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39172015256-1) · [SHA256SUMS.txt](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39172015256-1/SHA256SUMS.txt) · [تقرير apksigner](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39172015256-1/signature-verification.txt)
 
 نجح CI في إعادة تنزيل أصول الإصدار والتحقق من SHA-256. مضيف تنزيل أصول GitHub غير متاح مباشرة من بيئة التطوير، لذلك لم أزعم أن APK نُزّل محلياً؛ رابط الإصدار وتقرير التوقيع وملف checksum منشورة، ومرحلة CI نفسها أكدت تطابق checksum بعد إعادة التنزيل.
 
@@ -38,7 +38,8 @@ SHA-256: `c7b26c07a20172b5fd4c41c7b372431549975d5b644f41a803cbfe06c3d4761f`
 ### Playit وتشغيل الخادم
 
 - اختيار المستودع صار قبل إعداد Playit، لكتابة `PLAYIT_SECRET_KEY` إلى GitHub Actions Secrets الخاص بالمستودع المحدد والتحقق من حفظه. القيمة لا تُطلب في المحادثة ولا تُطبع في السجلات.
-- Runner يستخدم Agent الرسمي المثبّت الإصدار؛ يتحقق من SHA-256، يكتب السر مؤقتاً بصلاحية مقيدة، ويشغّل `playitd` مرة واحدة عبر `--secret-path`. جرى تنقيح السر من سجلات Agent قبل نشرها.
+- Runner يستخدم Agent الرسمي المثبّت الإصدار؛ يتحقق من SHA-256، يكتب السر مؤقتاً بصلاحية مقيدة، ويشغّل `playitd` مرة واحدة عبر `--secret-path` مع `--socket-path` داخل مجلد مؤقت خاص (0700). جرى تنقيح السر من سجلات Agent قبل نشرها.
+- من سجل التشغيل الحي رقم `39171261156` في `abiedadam0077/Minecraft-server-1-`: السر كان محفوظاً ومنفذ Minecraft المحلي يستجيب، لكن Agent خرج بـ1 بسبب `Failed to bind to socket: No such file or directory`. أُصلح مسار مقبس IPC في القالب واختُبر في CI؛ لم يُحدّث أو يُعاد تشغيل مستودع المستخدم بعد الإصلاح، فلا نزعم نجاح اتصال حي حتى الآن.
 - جرى التحقق من مسار بيانات rundata ومخطط Agent/Tunnel بالاستناد إلى عميل Playit الرسمي، مع فصل صريح بين السر المحفوظ، حالة Agent، وجود/توافق Tunnel، عنوان Playit الحقيقي، وفحص منفذ Minecraft المحلي ثم فحص البروتوكول الخارجي. لا يُختلق عنوان ولا حالة اتصال.
 - لم يعد التطبيق أو Runner ينشئ Tunnel آلياً؛ المستخدم ينشئه يدوياً مرة واحدة. عند الالتباس يمكن اختيار Tunnel المقصود يدوياً، وتُعرض حالات غياب Tunnel أو عدم توافقه أو عدم تخصيص عنوانه كحالات مستقلة.
 - دورة Runner محددة بخمس ساعات، ضمن حد مهلة GitHub Actions البالغ ست ساعات، مع الحفاظ على مسار الإيقاف وإعادة التشغيل.
@@ -59,8 +60,8 @@ SHA-256: `c7b26c07a20172b5fd4c41c7b372431549975d5b644f41a803cbfe06c3d4761f`
 
 | المرحلة | النتيجة |
 |---|---|
-| `flutter analyze` على Flutter 3.35.7 | **نجح** في CI رقم 39167342497. |
-| `flutter test --reporter expanded` | **نجحت المجموعة كاملة** في التشغيل نفسه، بما فيها اختبارات Widget والملفات وManifest/Traversal وPlayit وRunner. |
+| `flutter analyze` على Flutter 3.35.7 | **نجح** في CI رقم 39172015256. |
+| `flutter test --reporter expanded` | **نجحت المجموعة كاملة** في التشغيل نفسه، بما فيها اختبارات Widget والملفات وManifest/Traversal وPlayit وRunner، واختبار socket IPC الخاص وفشل bind المحاكى. |
 | بناء APK | **نجح**؛ أُنتجت حزمة arm64 وحزمة شاملة، وأُعيد توقيعهما كمخرجات Debug غير إنتاجية. |
 | فحص `aapt` | نجح: `io.github.abiedadam0077.novacraft`, الإصدار `1.0.0`، `minSdk 26`, `targetSdk 35`. |
 | فحص `apksigner` | نجح لكل APK: **v1/JAR=true, v2=true, v3=true**, باستخدام `--min-sdk-version 19` للتحقق من v1. |
@@ -82,7 +83,7 @@ SHA-256: `c7b26c07a20172b5fd4c41c7b372431549975d5b644f41a803cbfe06c3d4761f`
 
 ## القيود والخطوات اليدوية المتبقية
 
-1. **لا يوجد اختبار حي لـPlayit/Minecraft:** لم يُحدد مستودع خادم لهذا الاختبار، ولم يُستخدم سر المستخدم أو Tunnel فعلي أو خادم Minecraft حي. لا ترسل السر؛ عند طلب اختبار فعلي يكفي `OWNER/REPO` مع إتاحة Workflow، وتقوم أنت بإضافة السر عبر التطبيق/Secrets.
+1. **التحقق الحي بعد الإصلاح ما زال مطلوباً:** فُحص تشغيل حقيقي في `abiedadam0077/Minecraft-server-1-` رقم `39171261156`؛ المنفذ المحلي كان يستجيب لكن Agent فشل قبل الاتصال بسبب socket path. لم يُتحقق من اتصال Agent/Tunnel بعد الإصلاح. بعد تثبيت التطبيق المحدّث، أوقف الدورة الحالية بأمان، ثم شغّل **تحديث المشغّل** وابدأ دورة جديدة؛ لا ترسل قيمة السر ولا تنشئ Tunnel جديداً.
 2. أنشئ Agent وTunnel يدوياً في Playit كما يشرح `docs/PLAYIT-DIAGNOSTICS-AR.md`؛ حفظ السر وحده لا يثبت اتصال Agent أو Tunnel. GitHub Actions توفر Runner مؤقتاً وليست استضافة 24/7.
 3. للسيرفرات التي أُنشئت بإصدار أقدم، أوقف Workflows النشطة ثم شغّل **تحديث المشغّل** من إعدادات ذلك السيرفر مرة واحدة.
 4. لا يوجد اختبار تثبيت/فتح على محاكي أو جهاز فعلي بسبب رفض workflow dispatch بـ403. كذلك لا يمكن اعتبار `flutter analyze`/`flutter test` بديلين عن ذلك.

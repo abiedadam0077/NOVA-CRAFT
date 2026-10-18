@@ -36,19 +36,24 @@
 6. إذا كان هناك أكثر من Tunnel متوافق، اختره يدوياً في NOVA CRAFT. انتظر `Connection ready` بعد نجاح فحص الطرفين.
 7. إذا لم يُرجع Agent API عنواناً، أدخل `host:port` معروفاً يدوياً في Network settings للاختبار المباشر من التطبيق. هذا لا يغيّر بيانات Tunnel التي يراها runner ولا يثبت اتصال Agent؛ حالة runner لا تصبح `Connection ready` إلا بعد عنوان Playit المبلغ عنه وفحص بروتوكول ناجح.
 
+## الحالة الحية التي أبلغ عنها المستخدم
+
+في 2026-10-18 فُحصت بيانات الحالة المنقحة من مستودع المستخدم `abiedadam0077/Minecraft-server-1-`، تشغيل GitHub Actions رقم `39171261156`. أظهر `serverPortStatus=listening` و`playitSecretStatus=saved`، لكن Agent خرج بالرمز `1` قبل الاتصال، ولم تُقرأ بيانات Tunnel. ذيل سجل Agent المنقح يذكر: `playitd error: IPC error: Failed to bind to socket: No such file or directory (os error 2)`.
+
+السبب هو فشل إنشاء مقبس IPC المحلي في مساره الافتراضي على Runner، وليس دليلاً على أن المفتاح مرفوض أو أن على المستخدم إنشاء Tunnel آخر. عُدّل القالب لتمرير `--socket-path` داخل مجلد التشغيل المؤقت الخاص (0700). لا يُعد ذلك اختباراً ناجحاً للاتصال بعد التعديل؛ يجب تحديث Runner في مستودع السيرفر بعد انتهاء التشغيل النشط، ثم التحقق من دورة جديدة قبل القول إن Agent/Tunnel اتصلا فعلياً. لم تُقرأ أو تُطلب قيمة السر.
+
 ## التحقق والقيود
 
-- فُحص قالب runner محلياً بـ`bash -n`، ومساعد Playit بـ`python3 -m py_compile`.
-- اختُبر مساعد rundata بمدخلات سلبية/إيجابية: لا Tunnel، نوع/نقل غير متوافق، عنوان غير مخصص، Tunnel Java TCP مع origin حقيقي، واختيار ID غير موجود.
-- اختُبر Java Server List Ping محلياً بخادم mock: ردّ Java صالح نجح، وقبول TCP مع بيانات Minecraft غير صالحة رُفض. هذا اختبار بروتوكول محلي، وليس اتصالاً خارجياً بـPlayit.
-- نجح CI للبناء الحالي: [`39124166880`](https://github.com/abiedadam0077/NOVA-CRAFT/actions/runs/39124166880)، commit `3a71772a856221c8ccd1d31e6acf704e882aff9c`. اجتاز `flutter analyze` و`flutter test` وبناء APK والتحقق من package/signature/SHA-256، ثم نزّل الأصول المنشورة وأعاد مطابقة checksums بنجاح.
+- يختبر `playit_runner_integration_test.dart` أن socket path داخل مجلد مؤقت خاص، وأن خطأ bind يُعرّف تشخيصياً مع حفظ رمز خروج Agent.
+- نجح CI الجديد [`39172015256`](https://github.com/abiedadam0077/NOVA-CRAFT/actions/runs/39172015256)، commit `a9a8cd31260a51f4d11c5344d2e526775a7ddeeb`: اجتاز `flutter analyze` و`flutter test` وبناء APK، والتحقق من `aapt` و`apksigner` و`zipalign` وSHA-256، ثم أعاد تنزيل الأصول المنشورة وفحص checksums.
+- جرى تحليل تشغيل المستخدم المباشر عبر `status.json` المنقح فقط؛ لم تُقرأ Secrets ولم يُستخدم أي مفتاح في بيئة التطوير.
 - لم يتوفر Flutter/Dart محلياً. جُرّب `dart format --output=none --set-exit-if-changed lib test` في CI منفصل؛ أبلغ عن 60 ملفاً من 61 تحتاج تنسيقاً، بينها ملفات كثيرة غير مرتبطة بالتعديل. لم أطبّق تنسيقاً شاملاً قد ينتج عنه diff واسع غير متعلق بالمهمة؛ لذلك التنسيق الآلي غير نظيف حالياً.
-- لم يُشغّل Workflow لخادم حقيقي ولم يُتحقق من اتصال Playit/Minecraft خارجي؛ مستودع الخادم الذي يحتوي `PLAYIT_SECRET_KEY` غير محدد. يلزم تزويد `OWNER/REPO` عند الرغبة في التحقق الحي؛ لا ترسل قيمة السر.
+- لم يُختبر اتصال Playit/Minecraft بعد تحديث مقبس IPC؛ يلزم إنهاء التشغيل النشط بأمان، وتحديث Runner، ثم بدء دورة جديدة والتحقق من الاتصال. لا تنشئ Tunnel جديداً ولا تغيّر نوعه استناداً إلى فشل Agent وحده.
 - لم يُشغّل Android emulator/device smoke لهذا البناء؛ بناء APK والتحقق من توقيعه لا يعادلان اختبار تشغيل على جهاز.
 
 ## APK الحالي المبني من الإصلاح
 
-- الإصدار `1.0.0`، الحزمة `io.github.abiedadam0077.novacraft`، وضع release، لكنه **موقّع بمفتاح debug** لا بمفتاح إنتاج. تحقق `apksigner` من سلامة التوقيع؛ لا يمكن استخدامه كتحديث فوق نسخة موقعة بمفتاح مختلف.
-- ARM64 (موصى به لمعظم هواتف Android): [تنزيل APK مباشر](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39124166880-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk) — SHA-256: `1bd16daeb6e1e99f24de9a980af33323edf086ddaa02a47d8172b9b52cf03d1a`.
-- Universal: [تنزيل APK مباشر](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39124166880-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk) — SHA-256: `100a95fe3cf9154d382084eace0664fc1b49efdfb286574121e1b62b20d8f855`.
-- [قائمة SHA-256 المنشورة](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39124166880-1/SHA256SUMS.txt)؛ أكّد CI صحة التنزيل ومطابقة البصمات بعد النشر.
+- الإصدار `1.0.0`، الحزمة `io.github.abiedadam0077.novacraft`، وضع release، لكنه **موقّع بمفتاح debug** لا بمفتاح إنتاج. تحقق `apksigner` من v1/JAR وv2 وv3؛ لا يمكن استخدامه كتحديث فوق نسخة موقعة بمفتاح مختلف.
+- ARM64 (موصى به لمعظم هواتف Android): [تنزيل APK مباشر](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39172015256-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk) — SHA-256: `fead9580c0825a8a5bfddbf13839b11cce1ec468467593524897306af0e9fcf7`.
+- Universal: [تنزيل APK مباشر](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39172015256-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk) — SHA-256: `9dba6e5b58b2e1040b34e767b1008af96ade55f4b713384928845c55cccbb126`.
+- [قائمة SHA-256 المنشورة](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39172015256-1/SHA256SUMS.txt)؛ أكّد CI صحة التنزيل ومطابقة البصمات بعد النشر.
