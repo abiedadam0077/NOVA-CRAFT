@@ -5,7 +5,7 @@
 - فصل حفظ `PLAYIT_SECRET_KEY` في GitHub Actions Secrets عن فحص الاتصال الحي. لا يمنع فشل/غياب فحص Playit حفظ السر، ونجاح الحفظ لا يُعرض كاتصال Agent.
 - يشغّل runner ثنائي Playit الرسمي Linux AMD64 `playitd` الإصدار `v1.0.10` بعد التحقق من SHA-256:
   `2df7d9f10227ab312b1ad341853db4e8a8243df5cfcdbae58713a4271711c339`.
-- يبدأ Agent مرة واحدة في كل دورة، مع `--secret-path <ملف مؤقت>` و`--platform-docker`. الملف وملف إعداد طلب API بصلاحية `0600` داخل مجلد مؤقت `0700`، ويُحذفان عند انتهاء runner. لا يُمرّر السر في argv أو يُترك في بيئة العمليات؛ يُستخدم حجب GitHub Actions وتنقيح سجل Agent قبل نشره.
+- يبدأ Agent مرة واحدة في كل دورة، مع `--secret-path <ملف مؤقت>` و`--platform-docker`. يُمرّر أيضاً `--socket-path <المجلد المؤقت>/playit.sock` لأن Runner قد لا يملك مجلد IPC الافتراضي لـPlayit؛ المجلد نفسه خاص بصلاحية `0700`. ملف السر وإعداد طلب API بصلاحية `0600`، وتُحذف الملفات والمقبس المؤقت عند انتهاء Runner. لا يُمرّر السر في argv أو يُترك في بيئة العمليات؛ يُستخدم حجب GitHub Actions وتنقيح سجل Agent قبل نشره.
 - لا يُسجّل `Agent connected` إلا عند قراءة علامة الاتصال الرسمية `playit connected; tunnels loaded` من سجل daemon. بقاء PID وحده لا يثبت الاتصال.
 - لا ينشئ التطبيق أو runner أي Tunnel. يقرأ runner `rundata` بعد تأكيد Agent، ويقبل فقط Tunnel متوافقاً مع الإصدار/النقل، والعنوان المبلغ عنه من Playit فقط.
 - يجري فحص Minecraft محلياً وخارجياً ببروتوكول اللعبة: Java Server List Ping/TCP، والمنفذ المحلي الافتراضي `25565`؛ Bedrock RakNet/UDP والمنفذ `19132`. TCP connect وحده لا ينتج `Connection ready`.

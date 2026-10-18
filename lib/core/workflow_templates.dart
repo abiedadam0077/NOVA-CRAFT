@@ -1212,11 +1212,10 @@ stop_failed_playit_agent() {
 
 playit_agent_failure() {
   local diagnostic="$1" message="$2" tunnel_diagnostic="${3:-agent_$1}"
-  if [ "$diagnostic" = "process_exited" ]; then
-    record_playit_agent_exit
-  else
-    stop_failed_playit_agent
-  fi
+  case "$diagnostic" in
+    process_exited|ipc_socket_failed) record_playit_agent_exit ;;
+    *) stop_failed_playit_agent ;;
+  esac
   PLAYIT_AGENT_STATUS=failed
   PLAYIT_AGENT_DIAGNOSTIC="$diagnostic"
   TUNNEL_STATE=error
@@ -1341,7 +1340,10 @@ start_playit() {
 
   # One official daemon process for this server cycle. It consumes the raw key
   # through a 0600 file; SECRET_KEY is never placed on argv or in its env.
-  nohup "$WORKSPACE_ABS/playitd" --secret-path "$PLAYIT_SECRET_FILE" --platform-docker \
+  # GitHub-hosted runners may not have Playit's default IPC parent directory.
+  # Keep its socket inside this run's already-created private temp directory.
+  nohup "$WORKSPACE_ABS/playitd" --secret-path "$PLAYIT_SECRET_FILE" \
+    --socket-path "$PLAYIT_TEMP_DIR/playit.sock" --platform-docker \
     > "$PLAYIT_LOG_PATH" 2>&1 </dev/null &
   PLAYIT_PID=$!
   PLAYIT_AGENT_EXIT_CODE=running
@@ -1350,7 +1352,11 @@ start_playit() {
   for attempt in $(seq 1 45); do
     if ! kill -0 "$PLAYIT_PID" 2>/dev/null; then
       record_playit_agent_exit
-      failure_diagnostic=process_exited
+      if grep -Eiq 'IPC error: Failed to bind to socket|failed to bind.*socket' "$PLAYIT_LOG_PATH"; then
+        failure_diagnostic=ipc_socket_failed
+      else
+        failure_diagnostic=process_exited
+      fi
       break
     fi
     if grep -Fiq 'playit connected; tunnels loaded' "$PLAYIT_LOG_PATH"; then
@@ -1386,6 +1392,9 @@ start_playit() {
         ;;
       process_exited)
         playit_agent_failure process_exited "The official Playit Agent exited before connecting (exit code ${PLAYIT_AGENT_EXIT_CODE})."
+        ;;
+      ipc_socket_failed)
+        playit_agent_failure ipc_socket_failed "The Playit Agent could not bind its local IPC socket; check the runner's temporary socket path."
         ;;
       *)
         PLAYIT_AGENT_STATUS=starting

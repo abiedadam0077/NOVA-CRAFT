@@ -14,10 +14,14 @@ void main() {
   const String testSecret = 'a1b2c3d4e5f6';
   const String fakeAgentSource = r'''#!/usr/bin/env bash
 set -euo pipefail
-[ "$#" -eq 3 ] && [ "${1:-}" = "--secret-path" ] && [ "${3:-}" = "--platform-docker" ] || exit 91
+[ "$#" -eq 5 ] && [ "${1:-}" = "--secret-path" ] && [ "${3:-}" = "--socket-path" ] && [ "${5:-}" = "--platform-docker" ] || exit 91
 secret_path="$2"
+socket_path="$4"
 [ -f "$secret_path" ] || { echo "private Agent secret file missing"; exit 92; }
 [ "$(stat -c %a "$secret_path")" = "600" ] || exit 93
+[ -d "$(dirname "$socket_path")" ] || { echo "private Agent socket directory missing"; exit 97; }
+[ "$(dirname "$socket_path")" = "$(dirname "$secret_path")" ] || exit 98
+[ "$(stat -c %a "$(dirname "$socket_path")")" = "700" ] || exit 99
 [ -z "${PLAYIT_SECRET_KEY:-}" ] || exit 94
 grep -Eq '^[[:xdigit:]]+$' "$secret_path" || { echo "private Agent secret format invalid"; exit 95; }
 [ "$(cat "$secret_path")" = "${MOCK_EXPECTED_SECRET:-}" ] || exit 96
@@ -33,6 +37,10 @@ case "${MOCK_AGENT_MODE:-connected}" in
   network)
     echo "Could not connect to Playit: network is unreachable"
     exec /usr/bin/sleep 30
+    ;;
+  socket)
+    echo "playitd error: IPC error: Failed to bind to socket: No such file or directory (os error 2)" >&2
+    exit 1
     ;;
   exit)
     exit "${MOCK_AGENT_EXIT_CODE:-37}"
@@ -253,6 +261,16 @@ rm -f "$WORKSPACE_ABS/playitd" "$WORKSPACE_ABS/playitd.tmp"
       expect(result['agentStatus'], 'starting');
       expect(result['agentDiagnostic'], 'network_unreachable');
       expect(result['tunnelDiagnostic'], 'agent_network_unreachable');
+      expect(result['serverPortStatus'], 'listening');
+    });
+
+    test('a missing default IPC parent is avoided with a private temp socket and diagnosed clearly', () async {
+      final Map<String, String> result = await runScenario(agentMode: 'socket');
+      expect(result['agentStatus'], 'failed');
+      expect(result['agentDiagnostic'], 'ipc_socket_failed');
+      expect(result['agentExitCode'], '1');
+      expect(result['tunnelStatus'], 'error');
+      expect(result['tunnelMessage'], contains('IPC socket'));
       expect(result['serverPortStatus'], 'listening');
     });
 

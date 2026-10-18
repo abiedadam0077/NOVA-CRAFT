@@ -490,6 +490,8 @@ class _NetworkViewState extends State<NetworkView> {
         return L10n.t('playitAgentTempFileFailure');
       case 'process_exited':
         return L10n.t('playitAgentProcessExited');
+      case 'ipc_socket_failed':
+        return L10n.t('playitAgentIpcSocketFailure');
       case 'startup_timeout':
         return L10n.t('playitAgentStillStarting');
       case 'secret_missing':
