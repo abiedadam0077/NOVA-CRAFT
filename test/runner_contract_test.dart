@@ -106,7 +106,7 @@ void main() {
     test('restore accepts only this server’s explicit tag or its newest backup', () {
       expect(script.contains('NOVA_RESTORE_TAG'), isTrue);
       expect(script.contains('invalid-restore-tag'), isTrue);
-      expect(script.contains('startswith("backup-'), isTrue);
+      expect(script.contains('startswith(prefix)'), isTrue);
       expect(script.contains(r'"backup-$SID-"[A-Za-z0-9_-]'), isTrue);
       expect(script.contains('NOVA_CRAFT_BACKUP_VERIFIED'), isTrue);
       expect(script.contains('world-backup.sha256'), isTrue);

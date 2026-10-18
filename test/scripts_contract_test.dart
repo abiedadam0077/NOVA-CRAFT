@@ -61,7 +61,7 @@ void main() {
   group('Playit', () {
     test('the agent key is sent as a header and never echoed', () {
       expect(runner.contains(r'Authorization: Agent-Key $PLAYIT_SECRET_KEY'), isTrue);
-      expect(playit.contains('Agent-Key'), isTrue); // documented in the contract
+      expect(playit.contains('never prints the agent secret'), isTrue);
       expect(playit.contains('print(secret'), isFalse);
       expect(playit.contains('print(key'), isFalse);
       expect(runner.contains(r'echo "$PLAYIT_SECRET_KEY"'), isFalse);
