@@ -108,6 +108,80 @@ void main() {
     });
   });
 
+  group('Large Git Data uploads', () {
+    test('mod and plugin JAR writes survive a Runner branch update and keep raw paths', () async {
+      final Uint8List bytes = Uint8List.fromList(List<int>.generate(1000001, (int i) => i & 0xff));
+
+      Future<void> uploadWithConcurrentRunnerCommit(String path) async {
+        String headSha = 'initial-commit';
+        int treeRequests = 0;
+        int commitRequests = 0;
+        int refUpdates = 0;
+        int blobRequests = 0;
+        final List<Map<String, dynamic>> treeBodies = <Map<String, dynamic>>[];
+        final List<Map<String, dynamic>> commitBodies = <Map<String, dynamic>>[];
+        final http.Client client = MockClient((http.Request request) async {
+          final Uri uri = request.url;
+          if (request.method == 'POST' && uri.path == '/repos/owner/repo/git/blobs') {
+            blobRequests++;
+            final Map<String, dynamic> body = jsonDecode(request.body) as Map<String, dynamic>;
+            expect(body['encoding'], 'base64');
+            expect(base64Decode(body['content'] as String), orderedEquals(bytes));
+            return http.Response('{"sha":"jar-blob-sha"}', 201);
+          }
+          if (request.method == 'GET' && uri.path == '/repos/owner/repo/git/ref/heads/main') {
+            return http.Response(jsonEncode(<String, Object?>{
+              'object': <String, String>{'sha': headSha},
+            }), 200);
+          }
+          if (request.method == 'GET' && uri.path == '/repos/owner/repo/git/commits/$headSha') {
+            final String treeSha = headSha == 'runner-commit' ? 'runner-tree' : 'tree-$headSha';
+            return http.Response(jsonEncode(<String, Object?>{
+              'tree': <String, String>{'sha': treeSha},
+            }), 200);
+          }
+          if (request.method == 'POST' && uri.path == '/repos/owner/repo/git/trees') {
+            treeRequests++;
+            treeBodies.add(jsonDecode(request.body) as Map<String, dynamic>);
+            return http.Response('{"sha":"upload-tree-$treeRequests"}', 201);
+          }
+          if (request.method == 'POST' && uri.path == '/repos/owner/repo/git/commits') {
+            commitRequests++;
+            commitBodies.add(jsonDecode(request.body) as Map<String, dynamic>);
+            return http.Response('{"sha":"upload-commit-$commitRequests"}', 201);
+          }
+          if (request.method == 'PATCH' && uri.path == '/repos/owner/repo/git/refs/heads/main') {
+            refUpdates++;
+            if (refUpdates == 1) {
+              // Simulate the server Runner committing status.json after our
+              // upload read the old head but before the ref update.
+              headSha = 'runner-commit';
+              return http.Response('{"message":"Update is not a fast forward"}', 422);
+            }
+            headSha = 'upload-commit-$commitRequests';
+            return http.Response('{"ref":"refs/heads/main"}', 200);
+          }
+          throw StateError('Unexpected mock request: ${request.method} $uri');
+        });
+        final GitHubApi api = GitHubApi(client: client);
+        addTearDown(api.dispose);
+
+        await api.putFile('owner', 'repo', path, bytes, 'nova: install test JAR', branch: 'main');
+
+        expect(blobRequests, 1, reason: 'the immutable JAR blob should not be retransmitted on a branch race');
+        expect(refUpdates, 2);
+        expect(treeRequests, 2);
+        expect(treeBodies.first['tree'][0]['path'], path, reason: 'Git tree paths must not be URL-encoded');
+        expect(treeBodies[1]['base_tree'], 'runner-tree', reason: 'retry must include the Runner commit');
+        expect(commitBodies.first['parents'], <String>['initial-commit']);
+        expect(commitBodies[1]['parents'], <String>['runner-commit']);
+      }
+
+      await uploadWithConcurrentRunnerCommit('server/mods/Example Mod.jar');
+      await uploadWithConcurrentRunnerCommit('server/plugins/Example Plugin.jar');
+    });
+  });
+
   group('Workflow run diagnostics', () {
     test('listRuns checks only the requested NOVA workflow and parses its status', () async {
       final List<http.Request> seen = <http.Request>[];

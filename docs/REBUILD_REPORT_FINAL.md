@@ -20,16 +20,18 @@
 ### arm64 — موصى به لمعظم أجهزة Android الحديثة
 
 [تنزيل مباشر: NOVA-CRAFT-1.0.0-arm64-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39323231274-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk)<br>
-الحجم: **27,373,741 بايت**
+الحجم: **27,373,741 بايت**<br>
+SHA-256: `042337989f0066908b5b0bd59c88fbb791e584ae75b3c831a9820071680e3119`
 
 ### APK شامل
 
 [تنزيل مباشر: NOVA-CRAFT-1.0.0-release-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39323231274-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk)<br>
-الحجم: **63,935,243 بايت**
+الحجم: **63,935,243 بايت**<br>
+SHA-256: `16e47ee4301005f989a77cc18a6670eb5f29c3b6a08a1d4f4263d0b743f4ce75`
 
 [صفحة الإصدار وتقارير التحقق](https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39323231274-1) · [SHA256SUMS.txt](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39323231274-1/SHA256SUMS.txt) · [تقرير apksigner](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39323231274-1/signature-verification.txt)
 
-نجح CI في إعادة تنزيل APKs المنشورة وفحص SHA-256. ملف `SHA256SUMS.txt` هو مرجع البصمات لهذا الإصدار. لم أتمكن من تنزيل ملفات الأصول محلياً لأن مضيف أصول GitHub غير متاح من بيئة التطوير؛ لذلك لا أضع هنا قيمة hash لم أتحقق منها محلياً.
+نجح CI في إعادة تنزيل APKs المنشورة وفحص SHA-256. القيم أعلاه هي بصمات الأصول المنشورة في بيانات GitHub Releases، وملف `SHA256SUMS.txt` مرفق مرجعاً لها. تعذّر تنزيل محتوى الأصول مباشرةً من بيئة التطوير؛ لذلك لم أزعم فحص الملف محلياً.
 
 **التوقيع:** فعّل Workflow مخططات v1/v2/v3، واجتاز التحقق الآلي لمخططي v1/JAR وv2 وللمحاذاة؛ أُرفق تقرير `apksigner` للرجوع إلى التفاصيل. شهادة التوقيع `CN=Android Debug`. يستخدم CI `--min-sdk-version 19` في أوامر التوقيع والتحقق لإظهار/فرض فحص v1؛ هذا الخيار لا يغيّر `minSdk 26` في Manifest. البناء **debug-signed وليس موقّعاً بمفتاح إنتاج**: لا يوجد keystore إنتاجي متاح. يُنشئ CI مفتاح Debug مؤقتاً لهذا البناء غير الإنتاجي فقط. بسبب اختلاف المفتاح، قد يرفض Android التثبيت فوق APK سابق موقّع بشهادة أخرى؛ انسخ ما تحتاجه ثم أزل التطبيق السابق قبل التثبيت الجديد، مع العلم أن الإزالة تمحو بيانات التطبيق المحلية. لم يُنشأ مفتاح إنتاج بديل.
 

@@ -1,5 +1,6 @@
 import 'dart:async';
 import 'dart:convert';
+import 'dart:io';
 import 'dart:typed_data';
 
 import 'package:archive/archive.dart';
@@ -17,6 +18,8 @@ class GitHubApi {
         _timeout = timeout;
 
   static const Duration defaultTimeout = Duration(seconds: 40);
+  static const Duration _largeBlobUploadTimeout = Duration(minutes: 3);
+  static const int _gitDataCommitAttempts = 5;
 
   final http.Client _client;
   final Duration _timeout;
@@ -49,7 +52,9 @@ class GitHubApi {
     Map<String, String>? headers,
     bool follow = true,
     Future<void>? abortTrigger,
+    Duration? requestTimeout,
   }) async {
+    final Duration effectiveTimeout = requestTimeout ?? _timeout;
     final Completer<void> requestAbort = Completer<void>();
     void abort() {
       if (!requestAbort.isCompleted) requestAbort.complete();
@@ -69,13 +74,13 @@ class GitHubApi {
       request.body = jsonEncode(jsonBody);
     }
     request.followRedirects = follow;
-    final http.StreamedResponse streamed = await _client.send(request).timeout(_timeout, onTimeout: () {
+    final http.StreamedResponse streamed = await _client.send(request).timeout(effectiveTimeout, onTimeout: () {
       abort();
-      throw TimeoutException('GitHub API $method timed out after ${_timeout.inSeconds}s');
+      throw TimeoutException('GitHub API $method timed out after ${effectiveTimeout.inSeconds}s');
     });
-    final http.Response response = await http.Response.fromStream(streamed).timeout(_timeout, onTimeout: () {
+    final http.Response response = await http.Response.fromStream(streamed).timeout(effectiveTimeout, onTimeout: () {
       abort();
-      throw TimeoutException('GitHub API response timed out after ${_timeout.inSeconds}s');
+      throw TimeoutException('GitHub API response timed out after ${effectiveTimeout.inSeconds}s');
     });
     lastRateLimitRemaining = response.headers['x-ratelimit-remaining'];
     return response;
@@ -473,6 +478,11 @@ class GitHubApi {
   }
 
   /// Large-file path: blob → tree → commit → ref update.
+  ///
+  /// The Runner also commits live status files to this branch. If that happens
+  /// between reading the branch head and advancing it, GitHub rejects the
+  /// non-fast-forward update. Rebuild the tree from the latest head and retry
+  /// instead of making both Mods and Plugins appear to fail intermittently.
   Future<void> uploadViaGitData(
     String owner,
     String repo,
@@ -484,53 +494,161 @@ class GitHubApi {
   }) async {
     final String base = '${AppConfig.githubApi}/repos/$owner/$repo';
     final String target = branch ?? await defaultBranchOf(owner, repo);
-    final dynamic blob = _decode(await _send(
-      'POST',
-      '$base/git/blobs',
-      jsonBody: <String, dynamic>{'content': base64Encode(bytes), 'encoding': 'base64'},
-      abortTrigger: abortTrigger,
-    ));
-    if (blob is! Map) throw ApiException(500, 'Blob upload failed');
-    final dynamic ref = _decode(await _send('GET', '$base/git/ref/heads/$target', abortTrigger: abortTrigger));
-    if (ref is! Map) throw ApiException(500, 'Could not read branch');
-    final String commitSha = (ref['object'] as Map)['sha'].toString();
-    final dynamic commit = _decode(await _send('GET', '$base/git/commits/$commitSha', abortTrigger: abortTrigger));
-    if (commit is! Map) throw ApiException(500, 'Could not read commit');
-    final String treeSha = (commit['tree'] as Map)['sha'].toString();
-    final dynamic tree = _decode(await _send(
-      'POST',
-      '$base/git/trees',
-      jsonBody: <String, dynamic>{
-        'base_tree': treeSha,
-        'tree': <Map<String, dynamic>>[
-          <String, dynamic>{
-            'path': _cleanPath(path).substring(1),
-            'mode': '100644',
-            'type': 'blob',
-            'sha': blob['sha'],
+    final String treePath = _gitTreePath(path);
+    final String encodedContent = base64Encode(bytes);
+    bool requestCancelled = false;
+    if (abortTrigger != null) {
+      unawaited(abortTrigger.then<void>((_) {
+        requestCancelled = true;
+      }));
+    }
+
+    dynamic blob;
+    for (int attempt = 1; attempt <= 3; attempt++) {
+      try {
+        blob = _decode(await _send(
+          'POST',
+          '$base/git/blobs',
+          jsonBody: <String, dynamic>{'content': encodedContent, 'encoding': 'base64'},
+          abortTrigger: abortTrigger,
+          requestTimeout: _largeBlobUploadTimeout,
+        ));
+        break;
+      } catch (error) {
+        if (requestCancelled || !_isTransientUploadError(error) || attempt == 3) rethrow;
+        await Future<void>.delayed(Duration(milliseconds: 250 * attempt));
+      }
+    }
+    if (blob is! Map || blob['sha'] is! String || (blob['sha'] as String).isEmpty) {
+      throw ApiException(500, 'Blob upload failed: GitHub did not return a blob SHA.');
+    }
+    final String blobSha = blob['sha'] as String;
+
+    for (int attempt = 1; attempt <= _gitDataCommitAttempts; attempt++) {
+      final dynamic ref = _decode(await _send('GET', '$base/git/ref/heads/$target', abortTrigger: abortTrigger));
+      if (ref is! Map || ref['object'] is! Map || (ref['object'] as Map)['sha'] == null) {
+        throw ApiException(502, 'Could not read the current repository branch head.');
+      }
+      final String commitSha = (ref['object'] as Map)['sha'].toString();
+      final dynamic commit = _decode(await _send('GET', '$base/git/commits/$commitSha', abortTrigger: abortTrigger));
+      if (commit is! Map || commit['tree'] is! Map || (commit['tree'] as Map)['sha'] == null) {
+        throw ApiException(502, 'Could not read the current repository tree.');
+      }
+      final String treeSha = (commit['tree'] as Map)['sha'].toString();
+      final dynamic tree = _decode(await _send(
+        'POST',
+        '$base/git/trees',
+        jsonBody: <String, dynamic>{
+          'base_tree': treeSha,
+          'tree': <Map<String, dynamic>>[
+            <String, dynamic>{
+              // Git tree paths are raw repository paths, not URL-escaped paths.
+              'path': treePath,
+              'mode': '100644',
+              'type': 'blob',
+              'sha': blobSha,
+            }
+          ],
+        },
+        abortTrigger: abortTrigger,
+      ));
+      if (tree is! Map || tree['sha'] == null) throw ApiException(500, 'Tree creation failed');
+      final dynamic newCommit = _decode(await _send(
+        'POST',
+        '$base/git/commits',
+        jsonBody: <String, dynamic>{
+          'message': message,
+          'tree': tree['sha'],
+          'parents': <String>[commitSha],
+        },
+        abortTrigger: abortTrigger,
+      ));
+      if (newCommit is! Map || newCommit['sha'] == null) throw ApiException(500, 'Commit creation failed');
+
+      try {
+        _decode(await _send(
+          'PATCH',
+          '$base/git/refs/heads/$target',
+          jsonBody: <String, dynamic>{'sha': newCommit['sha']},
+          abortTrigger: abortTrigger,
+        ));
+        return;
+      } catch (error) {
+        if (requestCancelled) rethrow;
+        if (_isGitReferenceConflict(error)) {
+          if (attempt < _gitDataCommitAttempts) {
+            await Future<void>.delayed(Duration(milliseconds: 150 * attempt));
+            continue;
           }
-        ],
-      },
-      abortTrigger: abortTrigger,
-    ));
-    if (tree is! Map) throw ApiException(500, 'Tree creation failed');
-    final dynamic newCommit = _decode(await _send(
-      'POST',
-      '$base/git/commits',
-      jsonBody: <String, dynamic>{
-        'message': message,
-        'tree': tree['sha'],
-        'parents': <String>[commitSha],
-      },
-      abortTrigger: abortTrigger,
-    ));
-    if (newCommit is! Map) throw ApiException(500, 'Commit creation failed');
-    _decode(await _send(
-      'PATCH',
-      '$base/git/refs/heads/$target',
-      jsonBody: <String, dynamic>{'sha': newCommit['sha']},
-      abortTrigger: abortTrigger,
-    ));
+          throw ApiException(
+            409,
+            'The repository branch kept changing while the JAR was uploading. Retry after the Runner finishes its current update.',
+          );
+        }
+        if (_isTransientUploadError(error)) {
+          // A timed-out PATCH may still have committed. Read back the exact
+          // Git blob before retrying, so a lost response cannot create another
+          // commit or report a successful install prematurely.
+          if (await _remoteBlobMatches(owner, repo, path, target, blobSha, abortTrigger)) return;
+          if (attempt < _gitDataCommitAttempts) continue;
+        }
+        rethrow;
+      }
+    }
+  }
+
+  Future<bool> _remoteBlobMatches(
+    String owner,
+    String repo,
+    String path,
+    String branch,
+    String expectedSha,
+    Future<void>? abortTrigger,
+  ) async {
+    try {
+      final String? remoteSha = await fileSha(
+        owner,
+        repo,
+        path,
+        branch: branch,
+        abortTrigger: abortTrigger,
+      );
+      return remoteSha?.toLowerCase() == expectedSha.toLowerCase();
+    } catch (_) {
+      return false;
+    }
+  }
+
+  static bool _isGitReferenceConflict(Object error) {
+    if (error is! ApiException) return false;
+    if (error.status == 409) return true;
+    if (error.status != 422) return false;
+    final String message = error.message.toLowerCase();
+    return message.contains('fast forward') || message.contains('reference update');
+  }
+
+  static bool _isTransientUploadError(Object error) {
+    if (error is TimeoutException ||
+        error is SocketException ||
+        error is HandshakeException ||
+        error is http.ClientException) {
+      return true;
+    }
+    if (error is ApiException) {
+      return const <int>{408, 425, 429, 500, 502, 503, 504}.contains(error.status);
+    }
+    return false;
+  }
+
+  static String _gitTreePath(String path) {
+    final String clean = path.trim().replaceFirst(RegExp(r'^/+'), '');
+    final List<String> segments = clean.split('/');
+    if (clean.isEmpty ||
+        clean.contains('\\') ||
+        segments.any((String segment) => segment.isEmpty || segment == '.' || segment == '..')) {
+      throw ApiException(400, 'The repository upload path is invalid.');
+    }
+    return clean;
   }
 
   // ---------------------------------------------------------------- actions

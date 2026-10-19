@@ -236,6 +236,114 @@ void main() {
     expect(complete.last, isTrue);
   });
 
+  test('a large streamed JAR verifies and downloads for both Mods and Plugins flows', () async {
+    final Uint8List artifact = Uint8List.fromList(List<int>.generate(1250000, (int i) => i & 0xff));
+    artifact[0] = 0x50;
+    artifact[1] = 0x4b;
+    artifact[2] = 0x03;
+    artifact[3] = 0x04;
+    final MockClient client = MockClient.streaming((http.BaseRequest request, Stream<List<int>> _) async {
+      expect(request.url.host, 'cdn.modrinth.com');
+      return http.StreamedResponse(
+        Stream<List<int>>.fromIterable(<List<int>>[
+          artifact.sublist(0, 512),
+          artifact.sublist(512, 600000),
+          artifact.sublist(600000),
+        ]),
+        200,
+        contentLength: artifact.length,
+        request: request,
+      );
+    });
+    final ModrinthApi api = ModrinthApi(client: client);
+    addTearDown(api.dispose);
+    final List<int> progress = <int>[];
+    final ModrinthVersionFile file = ModrinthVersionFile(
+      url: 'https://cdn.modrinth.com/data/test/version-1/Example Mod.jar',
+      filename: 'Example Mod.jar',
+      size: artifact.length,
+      primary: true,
+      hashes: <String, String>{'sha512': crypto.sha512.convert(artifact).toString()},
+    );
+
+    final Uint8List downloaded = await api.download(
+      file,
+      onProgress: (int receivedBytes, int totalBytes, bool complete) {
+        progress.add(receivedBytes);
+        expect(totalBytes, artifact.length);
+      },
+    );
+
+    expect(downloaded, orderedEquals(artifact));
+    expect(progress.first, 0);
+    expect(progress.last, artifact.length);
+  });
+
+  test('a verified large Modrinth JAR uploads to the real Mods and Plugins roots', () async {
+    final Uint8List artifact = Uint8List.fromList(List<int>.generate(1000001, (int i) => i & 0xff));
+    artifact[0] = 0x50;
+    artifact[1] = 0x4b;
+    artifact[2] = 0x03;
+    artifact[3] = 0x04;
+    String currentHead = 'initial-commit';
+    int treeCount = 0;
+    int commitCount = 0;
+    final List<String> uploadedPaths = <String>[];
+    final MockClient client = MockClient((http.Request request) async {
+      final Uri uri = request.url;
+      if (uri.host == 'cdn.modrinth.com') return http.Response.bytes(artifact, 200);
+      if (uri.host != 'api.github.com') throw StateError('Unexpected host: $uri');
+      if (request.method == 'POST' && uri.path == '/repos/owner/repo/git/blobs') {
+        final Map<String, dynamic> body = jsonDecode(request.body) as Map<String, dynamic>;
+        expect(base64Decode(body['content'] as String), orderedEquals(artifact));
+        return _json(<String, String>{'sha': _gitBlobSha(artifact)}, status: 201);
+      }
+      if (request.method == 'GET' && uri.path == '/repos/owner/repo/git/ref/heads/main') {
+        return _json(<String, Object?>{'object': <String, String>{'sha': currentHead}});
+      }
+      if (request.method == 'GET' && uri.path == '/repos/owner/repo/git/commits/$currentHead') {
+        return _json(<String, Object?>{'tree': <String, String>{'sha': 'tree-$currentHead'}});
+      }
+      if (request.method == 'POST' && uri.path == '/repos/owner/repo/git/trees') {
+        final Map<String, dynamic> body = jsonDecode(request.body) as Map<String, dynamic>;
+        final List<dynamic> entries = body['tree'] as List<dynamic>;
+        uploadedPaths.add((entries.single as Map<String, dynamic>)['path'] as String);
+        treeCount++;
+        return _json(<String, String>{'sha': 'upload-tree-$treeCount'}, status: 201);
+      }
+      if (request.method == 'POST' && uri.path == '/repos/owner/repo/git/commits') {
+        commitCount++;
+        return _json(<String, String>{'sha': 'upload-commit-$commitCount'}, status: 201);
+      }
+      if (request.method == 'PATCH' && uri.path == '/repos/owner/repo/git/refs/heads/main') {
+        currentHead = (jsonDecode(request.body) as Map<String, dynamic>)['sha'] as String;
+        return _json(<String, String>{'ref': 'refs/heads/main'});
+      }
+      throw StateError('Unexpected mock request: ${request.method} $uri');
+    });
+    addTearDown(client.close);
+    final ModrinthApi modrinth = ModrinthApi(client: client);
+    final GitHubApi github = GitHubApi(client: client);
+    final ModrinthVersionFile file = ModrinthVersionFile(
+      url: 'https://cdn.modrinth.com/data/test/version-1/Example.jar',
+      filename: 'Example.jar',
+      size: artifact.length,
+      primary: true,
+      hashes: <String, String>{'sha512': crypto.sha512.convert(artifact).toString()},
+    );
+
+    for (final String path in <String>[
+      'server/mods/Example Mod.jar',
+      'server/plugins/Example Plugin.jar',
+    ]) {
+      final Uint8List downloaded = await modrinth.download(file);
+      await github.putFile('owner', 'repo', path, downloaded, 'nova: install Example', branch: 'main');
+    }
+
+    expect(uploadedPaths, <String>['server/mods/Example Mod.jar', 'server/plugins/Example Plugin.jar']);
+    expect(currentHead, 'upload-commit-2');
+  });
+
   test('oversized Modrinth artifacts are rejected before a network request', () async {
     int requestCount = 0;
     final MockClient client = MockClient((http.Request request) async {
