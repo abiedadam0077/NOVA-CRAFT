@@ -902,7 +902,7 @@ class _ServerFilesViewState extends State<ServerFilesView> {
                 ),
               ),
               Container(
-                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 0),
                 decoration: BoxDecoration(
                   color: p.cardSoft.withValues(alpha: 0.8),
                   borderRadius: NovaRadii.rMd,
