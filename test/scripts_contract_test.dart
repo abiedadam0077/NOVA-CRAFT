@@ -44,7 +44,7 @@ void main() {
     test('managed Git JARs are reconciled into the runner data root', () {
       expect(fileops.contains('def sync_managed_jars'), isTrue);
       expect(fileops.contains('git ls-tree'), isTrue);
-      expect(fileops.contains('git cat-file blob'), isTrue);
+      expect(fileops.contains('"cat-file", "blob", object_sha'), isTrue);
       expect(fileops.contains('managed JAR blob hash did not match Git'), isTrue);
       expect(runner.contains('fileops.py sync-jars'), isTrue);
       expect(runner.contains('jarSyncStatus'), isTrue);

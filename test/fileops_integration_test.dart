@@ -290,6 +290,7 @@ printf '__FILES__manifest=%s snapshot=%s\n' "$FILES_MANIFEST_STATUS" "$FILES_SNA
 
     await git(<String>['rm', '-q', 'server/plugins/example.jar']);
     await git(<String>['commit', '-qm', 'remove managed plugin']);
+    jar.parent.createSync(recursive: true);
     jar.writeAsBytesSync(<int>[1, 2, 3, 4, 5]); // old cache restores the removed plugin
     sync = await runFileOps(<String>['sync-jars', data.path, repo.path, 'server', 'PAPER', out.path]);
     expect(sync.exitCode, 0, reason: '${sync.stderr} ${sync.stdout}');

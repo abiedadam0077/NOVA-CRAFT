@@ -78,9 +78,10 @@ void main() {
     test('failure to publish the backup verification marker is fail-closed', () {
       final int markerEdit = script.indexOf(r'gh release edit "$tag"');
       final int refusal = script.indexOf('refusing to count it as a completed backup', markerEdit);
+      final int failedReturn = script.indexOf('return 1', refusal);
       expect(markerEdit, greaterThan(0));
       expect(refusal, greaterThan(markerEdit));
-      expect(script.substring(markerEdit, refusal).contains('return 1'), isTrue);
+      expect(failedReturn, greaterThan(refusal));
     });
   });
 
