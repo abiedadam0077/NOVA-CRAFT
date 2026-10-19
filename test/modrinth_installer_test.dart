@@ -7,6 +7,7 @@ import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:nova_craft/core/cancellation.dart';
+import 'package:nova_craft/core/github_api.dart';
 import 'package:nova_craft/core/models.dart';
 import 'package:nova_craft/core/modrinth_api.dart';
 import 'package:nova_craft/core/modrinth_installer.dart';

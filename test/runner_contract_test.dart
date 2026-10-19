@@ -122,7 +122,7 @@ void main() {
       expect(script.contains('world-backup.sha256'), isTrue);
       expect(script.contains('verify_backup_release() {'), isTrue);
       expect(script.contains(r'gh api "repos/$REPO/releases/tags/$tag"'), isTrue);
-      final int releaseVerified = script.indexOf('verify_backup_release "$REQUESTED_RESTORE_TAG"');
+      final int releaseVerified = script.indexOf(r'verify_backup_release "$REQUESTED_RESTORE_TAG"');
       final int download = script.indexOf(r'gh release download "$REQUESTED_RESTORE_TAG"');
       expect(releaseVerified, greaterThan(0));
       expect(download, greaterThan(releaseVerified));
@@ -144,19 +144,19 @@ void main() {
     });
 
     test('world ZIP import validates first and requires a safety backup before replacement', () {
-      final int preflight = script.indexOf('fileops.py validate-import "$DATA_ABS"');
+      final int preflight = script.indexOf(r'fileops.py validate-import "$DATA_ABS"');
       final int backup = script.indexOf('backup_now "pre-world-import"');
-      final int importer = script.indexOf('fileops.py import "$DATA_ABS"');
+      final int importer = script.indexOf(r'fileops.py import "$DATA_ABS"');
       expect(preflight, greaterThan(0));
       expect(backup, greaterThan(preflight));
       expect(importer, greaterThan(backup));
-      expect(script.contains('put_file "$INCOMING/result.json"'), isTrue);
+      expect(script.contains(r'put_file "$INCOMING/result.json"'), isTrue);
       expect(script.contains('WORLD_NAME="Bedrock level"'), isTrue);
       expect(script.contains('WORLD_NAME="world"'), isTrue);
       expect(script.contains('world-import-safety-backup-failed'), isTrue);
       expect(script.contains('result["status"] = "blocked"'), isTrue);
       expect(script.contains('result["error"] = "safety-backup-failed"'), isTrue);
-      expect(script.contains('publish_import_result "$import_preflight" "nova: world import blocked"'), isTrue);
+      expect(script.contains(r'publish_import_result "$import_preflight" "nova: world import blocked"'), isTrue);
       expect(script.contains('current world was left unchanged'), isTrue);
     });
 
@@ -164,8 +164,8 @@ void main() {
       expect(script.contains('publish_import_result() {'), isTrue);
       expect(script.contains('payload["processedAt"]'), isTrue);
       expect(script.contains('publish_import_result /tmp/nova-import.json'), isTrue);
-      expect(script.contains('publish_import_result "$import_preflight"'), isTrue);
-      expect(script.contains('put_file "$INCOMING/result.json"'), isTrue);
+      expect(script.contains(r'publish_import_result "$import_preflight"'), isTrue);
+      expect(script.contains(r'put_file "$INCOMING/result.json"'), isTrue);
     });
   });
 
