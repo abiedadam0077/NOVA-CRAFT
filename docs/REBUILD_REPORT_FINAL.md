@@ -1,42 +1,90 @@
-# التقرير النهائي لإصلاحات NOVA CRAFT (Final Repair Report)
+# NOVA CRAFT — التقرير النهائي للتنفيذ والتحقق
 
-تم الانتهاء بنجاح من معالجة وتصحيح جميع المشكلات الأساسية في تطبيق NOVA CRAFT، وتم التحقق من استقرار جميع العمليات المتعلقة بإدارة الخوادم، الاتصال بشبكة Playit، وتثبيت التعديلات (Mods/Plugins). 
+**التاريخ:** 2026-10-18<br>
+**الفرع:** `arena/9027d464-nova-craft`<br>
+**التزام الكود الذي بُني:** `a9a8cd31260a51f4d11c5344d2e526775a7ddeeb`<br>
+**GitHub Actions:** [التشغيل الناجح 39172015256](https://github.com/abiedadam0077/NOVA-CRAFT/actions/runs/39172015256)<br>
+**وسم الإصدار:** `flutter-apk-39172015256-1`<br>
+**مرجع المتطلبات:** `NOVA_CRAFT_MASTER_IMPLEMENTATION_BRIEF.md` من المستودع، SHA-1 `5093818629d00df7f041410f002b6bd1cf5ec0ee`.
 
-فيما يلي ملخص تفصيلي للمشكلات التي تم حلها:
+## الخلاصة
 
-## 1. توافق إصدارات PaperMC (Paper Versions)
-- **المشكلة:** واجهة برمجة تطبيقات `api.papermc.io/v2` أصبحت مهملة ولا تدعم الإصدارات الحديثة (بدءًا من 1.21.2).
-- **الحل:** تم الانتقال بالكامل إلى نقطة نهاية `fill.papermc.io/v3`. ونظرًا لأن الحماية الشبكية لبيئة التطوير حظرت الاتصال المباشر، تم التحقق من سلامة البيانات عن طريق إنشاء سير عمل GitHub مخصص لجلب البيانات ودمجها. تم تحديث آلية التحليل في `minecraft_api.dart` لقراءة الروابط وبصمات SHA-256 بشكل صحيح من هيكل `downloads['server:default']`.
+أُصلح مسار الملفات من مصدر المشكلة: Runner يولّد Manifest فعلياً من مجلد بيانات السيرفر، ينشئ مجلد النشر عند غيابه، وينشره إلى GitHub Contents؛ قارئ التطبيق يتحقق من المخطط والطوابع الزمنية والأحجام والمسارات، ويعرض حالات Workflow/الصلاحيات/الشبكة بدلاً من إظهار قائمة أو اتصال وهمي. كذلك فُصلت حالات حفظ سر Playit عن بدء Agent وTunnel وفحص Minecraft، وأضيف مسار آمن لتحديث ملفات Runner للسيرفرات الأقدم.
 
-## 2. إدارة الملفات (File Manager)
-- **المشكلة:** ظهور "أخطاء غير متوقعة" (Unexpected errors) وعدم ظهور قائمة الملفات الحقيقية.
-- **الحل:** تم تتبع المشكلة وتبين أن استدعاءات `getFileText` في واجهة برمجة تطبيقات GitHub لم تكن تحدد الفرع المستهدف (Branch) بشكل صريح، مما أدى إلى محاولة التطبيق قراءة `manifest.json` من الفرع الافتراضي بدلاً من فرع الخادم النشط. تم تمرير خاصية `branch: widget.config.defaultBranch` إلى جميع استدعاءات جلب البيانات، وتم التأكد من معالجة أخطاء 404 بأناقة لعرض حالة التحميل بسلاسة.
+اجتاز الكود **`flutter analyze` ومجموعة `flutter test` كاملة** في CI، وبُني APK جديد يؤكد تقريره **v1=true وv2=true وv3=true**. كما فُحص سبب تعطل Playit في المستودع الذي أرسله المستخدم: سجل Agent المنقح أظهر `Failed to bind to socket: No such file or directory`؛ عُدّل Runner لاستخدام مقبس IPC داخل مجلد مؤقت خاص، ونجحت اختبارات العقد والتكامل والبناء. لم تُجرَ بعد دورة جديدة في مستودع المستخدم بعد تحديث Runner، لذلك **اتصال Playit/Tunnel بعد الإصلاح لم يُثبت بعد**. لا يوجد أيضاً اختبار تثبيت على جهاز/محاكي Android.
 
-## 3. تكامل Playit.gg
-- **المشكلة:** الحاجة إلى توفير تجربة اتصال بنقرة واحدة وتفادي إخفاء التفاصيل أو اختراع حالة اتصال وهمية، مع معالجة المصادقة اليدوية (Guest Claim).
-- **الحل:** تم بناء نظام اتصال جديد بالكامل يعتمد على الـ Guest Claim Flow الأصلي. يقوم التطبيق بإنشاء رمز سري `Claim Code` والتواصل مع واجهة `/claim/setup`، ثم توجيه المستخدم تلقائيًا عبر المتصفح ليوافق على ربط الوكيل (Agent). أثناء ذلك، يقوم التطبيق بالاستعلام (Polling) على واجهة `/claim/exchange` بانتظام حتى يحصل على المفتاح السري بأمان، دون كتابته صراحة أو تخزينه في مكان غير آمن.
+## التنزيل المباشر للحزم
 
-## 4. الإضافات والتعديلات (Mods/Plugins)
-- **المشكلة:** الحاجة إلى إعادة تصميم صفحة Modrinth لتشمل علامات تبويب واضحة والتأكد من التثبيت في المسار الصحيح.
-- **الحل:** تم تعديل `mods_screen.dart` ليقوم بإخفاء/إظهار علامات التبويب بناءً على ما يدعمه خادم اللعبة الفعلي (عن طريق التأكد من `widget.config.supportsMods` و `supportsPlugins`). بالإضافة إلى ذلك، تم التحقق من توافق مسارات التثبيت تلقائيًا (إما `mods/` أو `plugins/`) وتم تصحيح اتجاه العرض (RTL Layout) عن طريق تعديلات الحواشي الديناميكية.
+### arm64 — موصى به لمعظم أجهزة Android الحديثة
 
-## 5. إعدادات الخادم (Server Settings)
-- **المشكلة:** إعادة تنظيم الإعدادات بشكل منطقي لتشمل أقسام (عام، لعبة، شبكة، نسخ احتياطي).
-- **الحل:** تم إعادة تصميم `server_detail_screen.dart` بشكل كلي ضمن علامة تبويب "الإعدادات". تم تقسيم الخيارات إلى أقسام مرئية واضحة بمساعدة أيقونات ملائمة:
-  - **عام (General):** اسم الخادم، ورسالة اليوم (MOTD)، وخيار إعادة التشغيل التلقائي.
-  - **اللعبة (Game):** نمط اللعبة، الصعوبة، عدد اللاعبين، مسافة الرؤية، الذاكرة (Memory)، البذرة (Seed)، القتال (PvP)، وغيرها.
-  - **الشبكة (Network):** عنوان الاتصال المخصص، وضع الأونلاين (Online Mode).
-  - **النسخ الاحتياطي (Backups):** زر جديد بالكامل باسم "بدء النسخ الاحتياطي" يقوم بإرسال أمر `Provisioner.snapshot()` لحفظ لقطة فورية من الخادم بشكل مباشر عبر GitHub Actions.
-  - **إدارة اللاعبين (Manage Players):** أوامر الـ Console المبسطة للتحكم في اللاعبين.
+[تنزيل مباشر: NOVA-CRAFT-1.0.0-arm64-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39172015256-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk)<br>
+الحجم: **25,350,216 بايت**<br>
+SHA-256: `fead9580c0825a8a5bfddbf13839b11cce1ec468467593524897306af0e9fcf7`
 
-## 6. الاستقرار العام (Offline Mode)
-- **المشكلة:** حدوث تعطل مبكر للتطبيق عند بدء التشغيل في وضع الأوفلاين أو بدون إعداد.
-- **الحل:** كما هو محدد مسبقًا، تم نزع الاعتمادية على التشفير غير المدعوم (KeyStore) وتعطيل محرك Impeller للأجهزة غير المتوافقة، بالإضافة إلى إعداد الجلسة لتعمل بشكل افتراضي حتى عند فشل الاتصال بالشبكة (sessionReady).
+### APK شامل
 
-## التسليم النهائي
-تم تنفيذ واختبار كل المتطلبات بنجاح. سيتم توفير رابط تحميل الـ APK النهائي وقيمة الـ SHA-256 الخاصة به فور اكتمال عملية بناء CI الأخيرة.
+[تنزيل مباشر: NOVA-CRAFT-1.0.0-release-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39172015256-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk)<br>
+الحجم: **61,518,502 بايت**<br>
+SHA-256: `9dba6e5b58b2e1040b34e767b1008af96ade55f4b713384928845c55cccbb126`
 
----
-**رابط تحميل APK (مباشر من المستودع):** https://github.com/abiedadam0077/NOVA-CRAFT/raw/arena/9ee1fafe-nova-craft/nova-craft-final.apk
-**صفحة الإصدار (GitHub Release):** https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39085129294-1
-**SHA-256:** `9e74cd0afa4b4f048e542821e7aa5ced7ecb6c8c14635fad315f78c1a36370e0`
+[صفحة الإصدار وتقارير التحقق](https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39172015256-1) · [SHA256SUMS.txt](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39172015256-1/SHA256SUMS.txt) · [تقرير apksigner](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39172015256-1/signature-verification.txt)
+
+نجح CI في إعادة تنزيل أصول الإصدار والتحقق من SHA-256. مضيف تنزيل أصول GitHub غير متاح مباشرة من بيئة التطوير، لذلك لم أزعم أن APK نُزّل محلياً؛ رابط الإصدار وتقرير التوقيع وملف checksum منشورة، ومرحلة CI نفسها أكدت تطابق checksum بعد إعادة التنزيل.
+
+**التوقيع:** يؤكد تقرير `apksigner` أن كلا الملفين **v1/JAR=true, v2=true, v3=true**، مع شهادة `CN=Android Debug`. يستخدم CI `--min-sdk-version 19` في أوامر التوقيع والتحقق لإظهار/فرض فحص v1 عند أن `minSdk` في التطبيق 26؛ هذا الخيار لا يغيّر `minSdk 26` في Manifest. البناء **debug-signed وليس موقّعاً بمفتاح إنتاج**: لا يوجد keystore إنتاجي متاح. يُنشئ CI مفتاح Debug مؤقتاً لهذا البناء غير الإنتاجي فقط. بسبب اختلاف المفتاح، قد يرفض Android التثبيت فوق APK سابق موقّع بشهادة أخرى؛ انسخ ما تحتاجه ثم أزل التطبيق السابق قبل التثبيت الجديد، مع العلم أن الإزالة تمحو بيانات التطبيق المحلية. لم يُنشأ مفتاح إنتاج بديل.
+
+## ما نُفّذ
+
+### Playit وتشغيل الخادم
+
+- اختيار المستودع صار قبل إعداد Playit، لكتابة `PLAYIT_SECRET_KEY` إلى GitHub Actions Secrets الخاص بالمستودع المحدد والتحقق من حفظه. القيمة لا تُطلب في المحادثة ولا تُطبع في السجلات.
+- Runner يستخدم Agent الرسمي المثبّت الإصدار؛ يتحقق من SHA-256، يكتب السر مؤقتاً بصلاحية مقيدة، ويشغّل `playitd` مرة واحدة عبر `--secret-path` مع `--socket-path` داخل مجلد مؤقت خاص (0700). جرى تنقيح السر من سجلات Agent قبل نشرها.
+- من سجل التشغيل الحي رقم `39171261156` في `abiedadam0077/Minecraft-server-1-`: السر كان محفوظاً ومنفذ Minecraft المحلي يستجيب، لكن Agent خرج بـ1 بسبب `Failed to bind to socket: No such file or directory`. أُصلح مسار مقبس IPC في القالب واختُبر في CI؛ لم يُحدّث أو يُعاد تشغيل مستودع المستخدم بعد الإصلاح، فلا نزعم نجاح اتصال حي حتى الآن.
+- جرى التحقق من مسار بيانات rundata ومخطط Agent/Tunnel بالاستناد إلى عميل Playit الرسمي، مع فصل صريح بين السر المحفوظ، حالة Agent، وجود/توافق Tunnel، عنوان Playit الحقيقي، وفحص منفذ Minecraft المحلي ثم فحص البروتوكول الخارجي. لا يُختلق عنوان ولا حالة اتصال.
+- لم يعد التطبيق أو Runner ينشئ Tunnel آلياً؛ المستخدم ينشئه يدوياً مرة واحدة. عند الالتباس يمكن اختيار Tunnel المقصود يدوياً، وتُعرض حالات غياب Tunnel أو عدم توافقه أو عدم تخصيص عنوانه كحالات مستقلة.
+- دورة Runner محددة بخمس ساعات، ضمن حد مهلة GitHub Actions البالغ ست ساعات، مع الحفاظ على مسار الإيقاف وإعادة التشغيل.
+
+### Manifest والملفات
+
+- المصدر هو `nova-craft/files/manifest.json` الذي ينشئه Runner من مجلد بيانات السيرفر الحقيقي؛ ليس Artifact دائم لقائمة الملفات. Runner نفسه مؤقت وينتهي بانتهاء Workflow. ملفات العالم الدائمة محفوظة عبر النسخ الاحتياطية/الإصدارات وفق مسار النسخ، لا عبر بقاء Runner.
+- عولج غياب مجلد الإخراج الأب أثناء توليد Manifest، وأضيفت حالة فشل منفصلة للتوليد عن فشل نشر GitHub Contents. نُشرت أيضاً لقطة إعدادات نصية محدودة، مع تحذير عند بترها أو تعذر نشرها.
+- قارئ التطبيق يتحقق من schema والتاريخ والحجم والعدد والمسارات؛ يرفض traversal والمسارات المطلقة وBackslash والملفات غير الصالحة. يحافظ على Manifest الحقيقي عند فشل Snapshot بدلاً من اختلاق محتوى.
+- أضيفت رسائل عربية/إنجليزية قابلة لإعادة المحاولة لحالات التحميل، القائمة/المجلد الفارغ، الخادم المتوقف، Workflow الجاري/الفاشل، منع Contents/Actions، غياب Manifest، وأخطاء API والشبكة والمهلة.
+- اختُبرت تنفيذياً عمليات إنشاء ملف ومجلد ومجلد متداخل وتحديثه وانعكاسه على Manifest، مع رفض traversal وsymlink ومحاولة الكتابة خارج جذر البيانات. أُصلحت أيضاً حالات overflow في Skeleton/Empty UI التي كشفتها اختبارات الواجهة.
+
+### ترقية Runner للسيرفرات الموجودة
+
+الإنشاء كان يكتب ملفات Runner الجديدة فقط عند إنشاء السيرفر. أضيف في **إعدادات السيرفر → تحديث المشغّل** مسار صريح للسيرفرات القديمة: يتأكد التطبيق من عدم وجود Workflow نشط، ويطلب التأكيد، ثم يحدّث ملفات المساعدات وسير العمل المولّدة فقط. لا يكتب `server.json` ولا `server.properties` ولا العالم أو النسخ ولا GitHub Secrets. يجب استخدامه بعد توقف التشغيلات القديمة.
+
+## الاختبارات والتحقق
+
+| المرحلة | النتيجة |
+|---|---|
+| `flutter analyze` على Flutter 3.35.7 | **نجح** في CI رقم 39172015256. |
+| `flutter test --reporter expanded` | **نجحت المجموعة كاملة** في التشغيل نفسه، بما فيها اختبارات Widget والملفات وManifest/Traversal وPlayit وRunner، واختبار socket IPC الخاص وفشل bind المحاكى. |
+| بناء APK | **نجح**؛ أُنتجت حزمة arm64 وحزمة شاملة، وأُعيد توقيعهما كمخرجات Debug غير إنتاجية. |
+| فحص `aapt` | نجح: `io.github.abiedadam0077.novacraft`, الإصدار `1.0.0`، `minSdk 26`, `targetSdk 35`. |
+| فحص `apksigner` | نجح لكل APK: **v1/JAR=true, v2=true, v3=true**, باستخدام `--min-sdk-version 19` للتحقق من v1. |
+| المحاذاة وSHA-256 والنشر | `zipalign -c` نجح؛ أُنشئت checksums، رُفعت الأصول، ثم نزّل CI الملفات المنشورة وفحص SHA-256 بنجاح. |
+| محاكاة تنفيذية لـfileops وpublish_files | نجحت ضمن اختبارات CI؛ شملت ملفات ومجلدات متداخلة وتحديثاً وفشل النشر واحتواء المسارات. |
+| Playit وMinecraft | اجتازت عقود API/المخطط والمحاكاة واختبار Java Server List Ping محلياً؛ **ليس اتصالاً حياً بالخدمة**. |
+| فحوص مساعدة محلية | اجتاز `git diff --check` و`bash -n` و`python3 -m py_compile` لقوالب Runner ومساعداته، وفحص تزامن **869** مفتاح ترجمة ar/en. |
+| Android emulator smoke | **لم يُنفّذ**: طلب workflow اليدوي لهذه النسخة رُفض بـHTTP 403 `Resource not accessible by integration`. |
+
+أظهرت محاولات CI السابقة بعض أخطاء الاختبارات والتحليل أثناء التنفيذ؛ صُححت، والتشغيل النهائي أعلاه هو الذي اجتاز كل المراحل من التحليل إلى التحقق من APK. لا أعرض المحاولات الفاشلة على أنها نجاح.
+
+## قائمة الملفات
+
+- **Workflows والتوقيع:** `.github/workflows/flutter.yml`, `.github/workflows/android-smoke.yml`, `android/app/build.gradle.kts`. يوقّع Workflow ملف APK النهائي صراحةً بـv1/v2/v3 ويُفشل CI إن لم يتحقق v1 وv2؛ حُذف `.github/workflows/post_release.yml` الذي كان يحاول إيداع APK ودفعه إلى Git، و`.github/workflows/test_api.yml` الذي كان يضيف استجابات API إلى المستودع تلقائياً.
+- **التوثيق:** `README.md`, `docs/PHASE-A-AUDIT-AR.md`, `docs/PLAYIT-DIAGNOSTICS-AR.md`, `docs/REBUILD_REPORT_FINAL.md`.
+- **التطبيق والبيانات:** `lib/app.dart`, `lib/core/formatters.dart`, `lib/core/github_api.dart`, `lib/core/models.dart`, `lib/core/playit_api.dart`, `lib/core/provisioner.dart`, `lib/core/strings.dart`, `lib/core/validation.dart`, `lib/core/workflow_templates.dart`, `lib/design/widgets/feedback.dart`, `lib/state/app_state.dart`.
+- **الشاشات:** `lib/features/backups/backups_screen.dart`, `lib/features/console/console_screen.dart`, `lib/features/files/files_screen.dart`, `lib/features/network/network_screen.dart`, `lib/features/onboarding/playit_setup_screen.dart`, `lib/features/servers/create_server_screen.dart`, `lib/features/servers/repository_selection_screen.dart`, `lib/features/servers/server_detail_screen.dart`, `lib/features/settings/server_settings_screen.dart`.
+- **الاختبارات:** `test/fileops_integration_test.dart`, `test/files_screen_test.dart`, `test/formatters_test.dart`, `test/github_api_test.dart`, `test/models_test.dart`, `test/playit_api_test.dart`, `test/playit_runner_integration_test.dart`, `test/playit_runner_test.dart`, `test/runner_contract_test.dart`, `test/scripts_contract_test.dart`, `test/validation_test.dart`.
+
+## القيود والخطوات اليدوية المتبقية
+
+1. **التحقق الحي بعد الإصلاح ما زال مطلوباً:** فُحص تشغيل حقيقي في `abiedadam0077/Minecraft-server-1-` رقم `39171261156`؛ المنفذ المحلي كان يستجيب لكن Agent فشل قبل الاتصال بسبب socket path. لم يُتحقق من اتصال Agent/Tunnel بعد الإصلاح. بعد تثبيت التطبيق المحدّث، أوقف الدورة الحالية بأمان، ثم شغّل **تحديث المشغّل** وابدأ دورة جديدة؛ لا ترسل قيمة السر ولا تنشئ Tunnel جديداً.
+2. أنشئ Agent وTunnel يدوياً في Playit كما يشرح `docs/PLAYIT-DIAGNOSTICS-AR.md`؛ حفظ السر وحده لا يثبت اتصال Agent أو Tunnel. GitHub Actions توفر Runner مؤقتاً وليست استضافة 24/7.
+3. للسيرفرات التي أُنشئت بإصدار أقدم، أوقف Workflows النشطة ثم شغّل **تحديث المشغّل** من إعدادات ذلك السيرفر مرة واحدة.
+4. لا يوجد اختبار تثبيت/فتح على محاكي أو جهاز فعلي بسبب رفض workflow dispatch بـ403. كذلك لا يمكن اعتبار `flutter analyze`/`flutter test` بديلين عن ذلك.
+5. للحصول على APK إنتاجي قابل للتحديث فوق نسخة إصدار سابقة، يجب أن يوفّر مالك المشروع keystore إنتاجياً صالحاً لأسرار CI؛ النسخة المرتبطة هنا Debug-signed فقط.
