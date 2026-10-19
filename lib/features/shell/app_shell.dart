@@ -65,15 +65,26 @@ class _AppShellState extends State<AppShell> {
       extendBody: true,
       backgroundColor: p.bg,
       body: AuroraBackground(
-        child: IndexedStack(
-          index: _index,
-          children: <Widget>[
-            HomeScreen(active: _index == 0, onPickServer: _openServerPicker),
-            ConsoleScreen(active: _index == 1, onPickServer: _openServerPicker),
-            FilesScreen(active: _index == 2, onPickServer: _openServerPicker),
-            _ModsTab(active: _index == 3),
-            ServerSettingsScreen(active: _index == 4),
-          ],
+        child: LayoutBuilder(
+          builder: (BuildContext context, BoxConstraints constraints) {
+            final double contentWidth = constraints.maxWidth >= 840 ? 840 : constraints.maxWidth;
+            return Align(
+              alignment: Alignment.topCenter,
+              child: SizedBox(
+                width: contentWidth,
+                child: IndexedStack(
+                  index: _index,
+                  children: <Widget>[
+                    HomeScreen(active: _index == 0, onPickServer: _openServerPicker),
+                    ConsoleScreen(active: _index == 1, onPickServer: _openServerPicker),
+                    FilesScreen(active: _index == 2, onPickServer: _openServerPicker),
+                    _ModsTab(active: _index == 3),
+                    ServerSettingsScreen(active: _index == 4),
+                  ],
+                ),
+              ),
+            );
+          },
         ),
       ),
       bottomNavigationBar: NovaBottomBar(

@@ -63,27 +63,27 @@ class NovaPalette {
   static const NovaPalette dark = NovaPalette(
     brightness: Brightness.dark,
     bg: Color(0xFF070B18),
-    bgDeep: Color(0xFF04060E),
-    surface: Color(0xFF0C132A),
-    card: Color(0xFF141D3A),
-    cardSoft: Color(0xFF101830),
-    cardHigh: Color(0xFF1B2649),
-    stroke: Color(0x14FFFFFF),
-    strokeStrong: Color(0x4D6E7BFF),
-    overlay: Color(0x9904060E),
-    primary: Color(0xFF3B82F6),
-    primaryBright: Color(0xFF5B9CFF),
-    indigo: Color(0xFF4F5BFF),
-    violet: Color(0xFFA855F7),
-    cyan: Color(0xFF22D3EE),
-    success: Color(0xFF22C55E),
-    successBright: Color(0xFF34D399),
-    warning: Color(0xFFF59E0B),
-    danger: Color(0xFFEF4444),
-    dangerSoft: Color(0xFFF87171),
-    text: Color(0xFFEDF2FF),
-    textMuted: Color(0xFF9AA9C9),
-    textDim: Color(0xFF64739A),
+    bgDeep: Color(0xFF040713),
+    surface: Color(0xFF0B1328),
+    card: Color(0xFF111B36),
+    cardSoft: Color(0xFF0D162E),
+    cardHigh: Color(0xFF192644),
+    stroke: Color(0x1FFFFFFF),
+    strokeStrong: Color(0x665A6BFF),
+    overlay: Color(0xE6040713),
+    primary: Color(0xFF3478FF),
+    primaryBright: Color(0xFF62C8FF),
+    indigo: Color(0xFF575CFF),
+    violet: Color(0xFFA65CFF),
+    cyan: Color(0xFF28D7E8),
+    success: Color(0xFF24C77A),
+    successBright: Color(0xFF48E0A0),
+    warning: Color(0xFFFFB547),
+    danger: Color(0xFFF14B68),
+    dangerSoft: Color(0xFFFF7087),
+    text: Color(0xFFF0F4FF),
+    textMuted: Color(0xFFA5B2CF),
+    textDim: Color(0xFF7181A4),
     onPrimary: Colors.white,
   );
 
@@ -161,13 +161,13 @@ class NovaGradients {
   static const LinearGradient primary = LinearGradient(
     begin: Alignment.topLeft,
     end: Alignment.bottomRight,
-    colors: <Color>[Color(0xFF4F8DFF), Color(0xFF4F5BFF), Color(0xFF6D4AFF)],
+    colors: <Color>[Color(0xFF38BDF8), Color(0xFF3478FF), Color(0xFF6954FF)],
   );
 
   static const LinearGradient primaryDiagonal = LinearGradient(
     begin: Alignment.topCenter,
     end: Alignment.bottomCenter,
-    colors: <Color>[Color(0xFF4F8DFF), Color(0xFF3B6BF6)],
+    colors: <Color>[Color(0xFF62C8FF), Color(0xFF3478FF)],
   );
 
   static const LinearGradient violet = LinearGradient(
@@ -198,7 +198,7 @@ class NovaGradients {
         begin: Alignment.topLeft,
         end: Alignment.bottomRight,
         colors: p.isDark
-            ? <Color>[Color(0xFF18223F), Color(0xFF101830)]
+            ? <Color>[Color(0xFF16233F), Color(0xFF0E172E)]
             : <Color>[Colors.white, Color(0xFFF5F8FF)],
       );
 

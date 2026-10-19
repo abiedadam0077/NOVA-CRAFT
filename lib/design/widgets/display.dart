@@ -89,15 +89,30 @@ class ServerAvatar extends StatelessWidget {
                 CustomPaint(painter: _TilePainter()),
                 if (imageBytes != null)
                   Image.memory(imageBytes!, fit: BoxFit.cover)
-                else
-                  Center(
-                    child: Text(
-                      _initials,
-                      style: NovaTextStyles.display(size * 0.4, Colors.white).copyWith(
-                        shadows: <Shadow>[Shadow(color: Colors.black.withValues(alpha: 0.28), blurRadius: 8)],
+                else ...<Widget>[
+                  Image.asset(
+                    'assets/images/hero_castle_card.jpg',
+                    fit: BoxFit.cover,
+                    errorBuilder: (BuildContext context, Object error, StackTrace? stack) => Center(
+                      child: Text(
+                        _initials,
+                        style: NovaTextStyles.display(size * 0.4, Colors.white),
                       ),
                     ),
                   ),
+                  DecoratedBox(
+                    decoration: BoxDecoration(
+                      gradient: LinearGradient(
+                        begin: Alignment.topLeft,
+                        end: Alignment.bottomRight,
+                        colors: <Color>[
+                          colors.first.withValues(alpha: 0.20),
+                          const Color(0xAA050914),
+                        ],
+                      ),
+                    ),
+                  ),
+                ],
               ],
             ),
           ),
@@ -743,34 +758,85 @@ class SectionCard extends StatelessWidget {
   Widget build(BuildContext context) {
     final p = context.nova;
     return Container(
-      padding: padding,
       decoration: BoxDecoration(
         gradient: NovaGradients.card(p),
         borderRadius: NovaRadii.rLg,
         border: Border.all(color: p.stroke),
         boxShadow: NovaShadows.soft(p),
       ),
-      child: Column(
-        crossAxisAlignment: CrossAxisAlignment.start,
-        children: <Widget>[
-          Row(
-            children: <Widget>[
-              if (icon != null) ...<Widget>[
-                Icon(icon, size: 16, color: p.primaryBright),
-                const SizedBox(width: 7),
-              ],
-              Expanded(child: Text(title, style: NovaTextStyles.title(p.text))),
-              if (actionLabel != null && onAction != null)
-                GestureDetector(
-                  onTap: onAction,
-                  behavior: HitTestBehavior.opaque,
-                  child: Text(actionLabel!, style: NovaTextStyles.smallStrong(p.primaryBright)),
+      child: ClipRRect(
+        borderRadius: NovaRadii.rLg,
+        child: Stack(
+          children: <Widget>[
+            PositionedDirectional(
+              top: 0,
+              start: 16,
+              child: Container(
+                width: 38,
+                height: 2,
+                decoration: BoxDecoration(
+                  gradient: NovaGradients.primary,
+                  borderRadius: NovaRadii.rPill,
                 ),
-            ],
-          ),
-          const SizedBox(height: 12),
-          child,
-        ],
+              ),
+            ),
+            Padding(
+              padding: padding,
+              child: Column(
+                crossAxisAlignment: CrossAxisAlignment.start,
+                children: <Widget>[
+                  Row(
+                    children: <Widget>[
+                      if (icon != null) ...<Widget>[
+                        Container(
+                          width: 30,
+                          height: 30,
+                          decoration: BoxDecoration(
+                            color: p.primary.withValues(alpha: 0.12),
+                            borderRadius: NovaRadii.rXs,
+                            border: Border.all(color: p.primary.withValues(alpha: 0.20)),
+                          ),
+                          child: Icon(icon, size: 16, color: p.primaryBright),
+                        ),
+                        const SizedBox(width: 9),
+                      ],
+                      Expanded(
+                        child: Text(
+                          title,
+                          maxLines: 2,
+                          overflow: TextOverflow.ellipsis,
+                          style: NovaTextStyles.title(p.text),
+                        ),
+                      ),
+                      if (actionLabel != null && onAction != null)
+                        Padding(
+                          padding: const EdgeInsetsDirectional.only(start: 8),
+                          child: GestureDetector(
+                            onTap: onAction,
+                            behavior: HitTestBehavior.opaque,
+                            child: Row(
+                              mainAxisSize: MainAxisSize.min,
+                              children: <Widget>[
+                                Text(actionLabel!, style: NovaTextStyles.smallStrong(p.primaryBright)),
+                                const SizedBox(width: 2),
+                                Icon(
+                                  context.isRtl ? Icons.chevron_left_rounded : Icons.chevron_right_rounded,
+                                  size: 17,
+                                  color: p.primaryBright,
+                                ),
+                              ],
+                            ),
+                          ),
+                        ),
+                    ],
+                  ),
+                  const SizedBox(height: 12),
+                  child,
+                ],
+              ),
+            ),
+          ],
+        ),
       ),
     );
   }

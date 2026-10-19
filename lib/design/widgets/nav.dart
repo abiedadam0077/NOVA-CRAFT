@@ -113,32 +113,40 @@ class NovaBottomBar extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = context.nova;
-    final double bottomInset = MediaQuery.of(context).padding.bottom;
-    return Padding(
-      padding: EdgeInsets.fromLTRB(14, 0, 14, (bottomInset > 0 ? bottomInset * 0.4 : 0) + 10),
-      child: ClipRRect(
-        borderRadius: NovaRadii.rXl,
-        child: BackdropFilter(
-          filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
-          child: Container(
-            height: 68,
-            decoration: BoxDecoration(
-              color: p.isDark ? p.surface.withValues(alpha: 0.82) : Colors.white.withValues(alpha: 0.92),
+    return SafeArea(
+      top: false,
+      child: Align(
+        alignment: Alignment.bottomCenter,
+        child: ConstrainedBox(
+          constraints: const BoxConstraints(maxWidth: 680),
+          child: Padding(
+            padding: const EdgeInsets.fromLTRB(14, 0, 14, 8),
+            child: ClipRRect(
               borderRadius: NovaRadii.rXl,
-              border: Border.all(color: p.isDark ? p.stroke : p.strokeStrong.withValues(alpha: 0.2)),
-              boxShadow: NovaShadows.lifted(p),
-            ),
-            child: Row(
-              children: <Widget>[
-                for (int i = 0; i < items.length; i++)
-                  Expanded(
-                    child: _NavButton(
-                      item: items[i],
-                      selected: index == i,
-                      onTap: () => onChanged(i),
-                    ),
+              child: BackdropFilter(
+                filter: ui.ImageFilter.blur(sigmaX: 18, sigmaY: 18),
+                child: Container(
+                  height: 68,
+                  decoration: BoxDecoration(
+                    color: p.isDark ? p.surface.withValues(alpha: 0.88) : Colors.white.withValues(alpha: 0.94),
+                    borderRadius: NovaRadii.rXl,
+                    border: Border.all(color: p.isDark ? p.stroke : p.strokeStrong.withValues(alpha: 0.2)),
+                    boxShadow: NovaShadows.lifted(p),
                   ),
-              ],
+                  child: Row(
+                    children: <Widget>[
+                      for (int i = 0; i < items.length; i++)
+                        Expanded(
+                          child: _NavButton(
+                            item: items[i],
+                            selected: index == i,
+                            onTap: () => onChanged(i),
+                          ),
+                        ),
+                    ],
+                  ),
+                ),
+              ),
             ),
           ),
         ),
@@ -167,41 +175,47 @@ class _NavButton extends StatelessWidget {
     final p = context.nova;
     final Color active = p.primaryBright;
     final Color inactive = p.textDim;
-    return GestureDetector(
-      behavior: HitTestBehavior.opaque,
-      onTap: onTap,
-      child: AnimatedContainer(
-        duration: NovaDurations.normal,
-        curve: Curves.easeOutCubic,
-        margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
-        decoration: BoxDecoration(
-          color: selected ? active.withValues(alpha: 0.12) : Colors.transparent,
-          borderRadius: NovaRadii.rMd,
-          border: selected ? Border.all(color: active.withValues(alpha: 0.22)) : null,
-        ),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
-          children: <Widget>[
-            Icon(
-              selected ? (item.activeIcon ?? item.icon) : item.icon,
-              size: 21,
-              color: selected ? active : inactive,
-            ),
-            const SizedBox(height: 3),
-            Padding(
-              padding: const EdgeInsets.symmetric(horizontal: 2),
-              child: Text(
-              item.label,
-              maxLines: 1,
-              textAlign: TextAlign.center,
-              overflow: TextOverflow.ellipsis,
-              style: NovaTextStyles.small(selected ? active : inactive).copyWith(
-                fontSize: item.label.length > 12 ? 8.4 : 9.5,
-                fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+    return Semantics(
+      button: true,
+      selected: selected,
+      label: item.label,
+      child: GestureDetector(
+        behavior: HitTestBehavior.opaque,
+        onTap: onTap,
+        child: AnimatedContainer(
+          duration: NovaDurations.normal,
+          curve: Curves.easeOutCubic,
+          margin: const EdgeInsets.symmetric(horizontal: 2, vertical: 8),
+          decoration: BoxDecoration(
+            color: selected ? active.withValues(alpha: 0.12) : Colors.transparent,
+            borderRadius: NovaRadii.rMd,
+            border: selected ? Border.all(color: active.withValues(alpha: 0.22)) : null,
+          ),
+          child: Column(
+            mainAxisAlignment: MainAxisAlignment.center,
+            children: <Widget>[
+              Icon(
+                selected ? (item.activeIcon ?? item.icon) : item.icon,
+                size: 21,
+                color: selected ? active : inactive,
               ),
-            ),
-            ),
-          ],
+              const SizedBox(height: 3),
+              Padding(
+                padding: const EdgeInsets.symmetric(horizontal: 2),
+                child: Text(
+                  item.label,
+                  maxLines: 2,
+                  textAlign: TextAlign.center,
+                  overflow: TextOverflow.ellipsis,
+                  style: NovaTextStyles.small(selected ? active : inactive).copyWith(
+                    fontSize: item.label.length > 12 ? 8.8 : 9.5,
+                    height: 1.1,
+                    fontWeight: selected ? FontWeight.w800 : FontWeight.w600,
+                  ),
+                ),
+              ),
+            ],
+          ),
         ),
       ),
     );

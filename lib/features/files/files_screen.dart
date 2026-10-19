@@ -887,21 +887,41 @@ class _ServerFilesViewState extends State<ServerFilesView> {
                     if (manifest?.generatedAt != null)
                       Text(
                         L10n.f('filesSyncedAt', <String, String>{'time': Fmt.relative(manifest!.generatedAt)}),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
                         style: NovaTextStyles.caption(p.textDim),
                       )
                     else if (_problem == null)
-                      Text(L10n.t('filesWaitingForRun'), style: NovaTextStyles.caption(p.textDim)),
+                      Text(
+                        L10n.t('filesWaitingForRun'),
+                        maxLines: 1,
+                        overflow: TextOverflow.ellipsis,
+                        style: NovaTextStyles.caption(p.textDim),
+                      ),
                   ],
                 ),
               ),
-              if (_busy || _refreshing)
-                const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
-              else
-                NovaIconButton(icon: Icons.refresh_rounded, size: 34, iconSize: 17, tooltip: L10n.t('refresh'), onTap: () => _load(withSnapshot: true)),
-              const SizedBox(width: 6),
-              NovaIconButton(icon: Icons.create_new_folder_rounded, size: 34, iconSize: 17, tooltip: L10n.t('newFolder'), onTap: _newFolder),
-              const SizedBox(width: 6),
-              NovaIconButton(icon: Icons.upload_rounded, size: 34, iconSize: 17, filled: true, tooltip: L10n.t('uploadFile'), onTap: _upload),
+              Container(
+                padding: const EdgeInsets.symmetric(horizontal: 4, vertical: 4),
+                decoration: BoxDecoration(
+                  color: p.cardSoft.withValues(alpha: 0.8),
+                  borderRadius: NovaRadii.rMd,
+                  border: Border.all(color: p.stroke),
+                ),
+                child: Row(
+                  mainAxisSize: MainAxisSize.min,
+                  children: <Widget>[
+                    if (_busy || _refreshing)
+                      const SizedBox(width: 18, height: 18, child: CircularProgressIndicator(strokeWidth: 2))
+                    else
+                      NovaIconButton(icon: Icons.refresh_rounded, size: 34, iconSize: 17, tooltip: L10n.t('refresh'), onTap: () => _load(withSnapshot: true)),
+                    const SizedBox(width: 4),
+                    NovaIconButton(icon: Icons.create_new_folder_rounded, size: 34, iconSize: 17, tooltip: L10n.t('newFolder'), onTap: _newFolder),
+                    const SizedBox(width: 4),
+                    NovaIconButton(icon: Icons.upload_rounded, size: 34, iconSize: 17, filled: true, tooltip: L10n.t('uploadFile'), onTap: _upload),
+                  ],
+                ),
+              ),
             ],
           ),
         ),
