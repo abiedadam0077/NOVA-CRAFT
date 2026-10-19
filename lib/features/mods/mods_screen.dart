@@ -1,12 +1,16 @@
 import 'dart:async';
+import 'dart:convert';
 import 'dart:typed_data';
 
 import 'package:file_picker/file_picker.dart';
 import 'package:flutter/material.dart';
 
+import '../../core/cancellation.dart';
 import '../../core/formatters.dart';
 import '../../core/models.dart';
 import '../../core/modrinth_api.dart';
+import '../../core/modrinth_installer.dart';
+import '../../core/provisioner.dart';
 import '../../core/strings.dart';
 import '../../design/theme.dart';
 import '../../design/tokens.dart';
@@ -37,31 +41,82 @@ class _ModsViewState extends State<ModsView> {
   List<ModrinthProject> _results = <ModrinthProject>[];
   bool _searching = false;
   String? _searchError;
+  int _searchGeneration = 0;
   List<DirEntry> _installed = <DirEntry>[];
+  ServerRuntime? _runtime;
+  int _installedGeneration = 0;
   bool _loadingInstalled = false;
   String? _installedError;
   String _branch = 'main';
   String? _busyId;
+  String? _installProjectId;
+  CancellationToken? _installCancellation;
+  bool _downloadStarted = false;
+  bool _downloadComplete = false;
+  int _downloadReceivedBytes = 0;
+  int _downloadTotalBytes = 0;
+  DateTime? _lastDownloadProgressPaint;
   bool _loadedOnce = false;
 
   @override
   void initState() {
     super.initState();
-    _loader = _defaultLoader(0);
+    _tab = !widget.config.supportsMods && widget.config.supportsPlugins ? 1 : 0;
+    _loader = _defaultLoader(_tab);
+    _branch = widget.config.defaultBranch.isEmpty ? 'main' : widget.config.defaultBranch;
     WidgetsBinding.instance.addPostFrameCallback((_) async {
+      if (!mounted) return;
       await _loadBranch();
+      if (!mounted) return;
       await _refreshInstalled();
       await _search();
-  
-    if (!widget.config.supportsMods && widget.config.supportsPlugins) {
-      _tab = 1;
-      _loader = _defaultLoader(1);
-    }  });
+    });
   }
 
   @override
   void didUpdateWidget(ModsView oldWidget) {
     super.didUpdateWidget(oldWidget);
+    final bool serverChanged = oldWidget.config.id != widget.config.id ||
+        oldWidget.config.repoOwner != widget.config.repoOwner ||
+        oldWidget.config.repoName != widget.config.repoName ||
+        oldWidget.config.serverRoot != widget.config.serverRoot ||
+        oldWidget.config.defaultBranch != widget.config.defaultBranch ||
+        oldWidget.config.edition != widget.config.edition ||
+        oldWidget.config.software != widget.config.software ||
+        oldWidget.config.mcVersion != widget.config.mcVersion;
+    if (serverChanged) {
+      _installCancellation?.cancel();
+      _installCancellation = null;
+      _installProjectId = null;
+      _busyId = null;
+      _downloadStarted = false;
+      _downloadComplete = false;
+      _downloadReceivedBytes = 0;
+      _downloadTotalBytes = 0;
+      _lastDownloadProgressPaint = null;
+      _debounce?.cancel();
+      ++_searchGeneration;
+      ++_installedGeneration;
+      _tab = !widget.config.supportsMods && widget.config.supportsPlugins ? 1 : 0;
+      _loader = _defaultLoader(_tab);
+      _branch = widget.config.defaultBranch.isEmpty ? 'main' : widget.config.defaultBranch;
+      _browse = true;
+      _results = <ModrinthProject>[];
+      _installed = <DirEntry>[];
+      _runtime = null;
+      _searching = false;
+      _searchError = null;
+      _installedError = null;
+      _loadedOnce = false;
+      WidgetsBinding.instance.addPostFrameCallback((_) async {
+        if (!mounted) return;
+        await _loadBranch();
+        if (!mounted) return;
+        await _refreshInstalled();
+        await _search();
+      });
+      return;
+    }
     if (!oldWidget.active && widget.active && _loadedOnce) {
       _refreshInstalled();
     }
@@ -70,6 +125,7 @@ class _ModsViewState extends State<ModsView> {
   @override
   void dispose() {
     _debounce?.cancel();
+    _installCancellation?.cancel();
     _query.dispose();
     super.dispose();
   }
@@ -94,23 +150,41 @@ class _ModsViewState extends State<ModsView> {
   bool get _supported => widget.config.isJava && (_tab == 0 ? widget.config.supportsMods : widget.config.supportsPlugins);
 
   Future<void> _loadBranch() async {
+    final ServerConfig config = widget.config;
+    String branch = config.defaultBranch.isEmpty ? 'main' : config.defaultBranch;
     try {
       final AppState state = AppScope.read(context);
-      final GhRepo repo = await state.api.getRepo(widget.config.repoOwner, widget.config.repoName);
-      _branch = repo.defaultBranch.isEmpty ? 'main' : repo.defaultBranch;
+      final GhRepo repo = await state.api.getRepo(config.repoOwner, config.repoName);
+      if (repo.defaultBranch.isNotEmpty) branch = repo.defaultBranch;
     } catch (_) {
-      _branch = 'main';
+      // Use this server's saved branch if the repository cannot be queried.
     }
+    if (!mounted ||
+        config.id != widget.config.id ||
+        config.repoFull != widget.config.repoFull ||
+        config.defaultBranch != widget.config.defaultBranch) {
+      return;
+    }
+    _branch = branch;
   }
 
   void _onQueryChanged() {
     _debounce?.cancel();
+    ++_searchGeneration;
+    setState(() {
+      _searchError = null;
+      _searching = false;
+    });
     _debounce = Timer(const Duration(milliseconds: 450), _search);
-    setState(() {});
   }
 
   Future<void> _search() async {
     if (!_supported) return;
+    final int generation = ++_searchGeneration;
+    final String query = _query.text.trim();
+    final String projectType = _projectType;
+    final String? loader = _loader;
+    final String? gameVersion = widget.config.mcVersion.isEmpty ? null : widget.config.mcVersion;
     setState(() {
       _searching = true;
       _searchError = null;
@@ -118,41 +192,88 @@ class _ModsViewState extends State<ModsView> {
     try {
       final AppState state = AppScope.read(context);
       final List<ModrinthProject> hits = await state.modrinth.search(
-        query: _query.text.trim(),
-        projectType: _projectType,
-        loader: _loader,
-        gameVersion: widget.config.mcVersion.isEmpty ? null : widget.config.mcVersion,
+        query: query,
+        projectType: projectType,
+        loader: loader,
+        gameVersion: gameVersion,
       );
-      if (!mounted) return;
+      if (!mounted || generation != _searchGeneration) return;
       setState(() {
         _results = hits;
         _loadedOnce = true;
       });
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _searchGeneration) return;
       setState(() => _searchError = Fmt.error(error));
     } finally {
-      if (mounted) setState(() => _searching = false);
+      if (mounted && generation == _searchGeneration) setState(() => _searching = false);
+    }
+  }
+
+  Future<ServerRuntime?> _loadRunnerRuntime(AppState state) async {
+    try {
+      final String text = await state.api.getFileText(
+        widget.config.repoOwner,
+        widget.config.repoName,
+        Provisioner.statusPath,
+        branch: _branch,
+      );
+      final dynamic decoded = jsonDecode(text);
+      if (decoded is! Map) return null;
+      final Map<String, dynamic> json = Map<String, dynamic>.from(decoded);
+      if (json['serverId']?.toString() != widget.config.id) return null;
+      return ServerRuntime.fromJson(json);
+    } catch (_) {
+      // An old runner or a missing status file is unknown, never proof of install.
+      return null;
     }
   }
 
   Future<void> _refreshInstalled() async {
     if (!_supported) return;
+    final int generation = ++_installedGeneration;
     setState(() {
       _loadingInstalled = true;
       _installedError = null;
     });
     try {
       final AppState state = AppScope.read(context);
-      final List<DirEntry> entries = await state.api.listDir(widget.config.repoOwner, widget.config.repoName, _folder);
-      if (!mounted) return;
+      unawaited(_loadRunnerRuntime(state).then((ServerRuntime? runtime) {
+        if (!mounted || generation != _installedGeneration) return;
+        setState(() => _runtime = runtime);
+      }));
+      final List<DirEntry> entries = await state.api.listDir(
+        widget.config.repoOwner,
+        widget.config.repoName,
+        _folder,
+        branch: _branch,
+      );
+      if (!mounted || generation != _installedGeneration) return;
       setState(() => _installed = entries.where((DirEntry e) => e.name.toLowerCase().endsWith('.jar')).toList());
     } catch (error) {
-      if (!mounted) return;
+      if (!mounted || generation != _installedGeneration) return;
       setState(() => _installedError = Fmt.error(error));
     } finally {
-      if (mounted) setState(() => _loadingInstalled = false);
+      if (mounted && generation == _installedGeneration) setState(() => _loadingInstalled = false);
     }
+  }
+
+  String _runtimePath(DirEntry entry) {
+    final String prefix = '${widget.config.serverRoot}/';
+    return entry.path.startsWith(prefix) ? entry.path.substring(prefix.length) : entry.path;
+  }
+
+  bool _isSyncedToRunner(DirEntry entry) {
+    final ServerRuntime? runtime = _runtime;
+    if (runtime == null || runtime.jarSyncStatus != 'synced') return false;
+    return runtime.managedJarShas[_runtimePath(entry)] == entry.sha.toLowerCase();
+  }
+
+  String _syncLabel(DirEntry entry) {
+    if (_isSyncedToRunner(entry)) return 'modSyncedRunner';
+    if (_runtime?.jarSyncStatus == 'failed') return 'modSyncFailed';
+    if (_runtime?.jarSyncStatus == 'synced') return 'modSyncPending';
+    return 'modSyncUnknown';
   }
 
   DirEntry? _installedEntry(ModrinthProject project) {
@@ -193,10 +314,28 @@ class _ModsViewState extends State<ModsView> {
       );
 
   Future<void> _install(ModrinthProject project) async {
-    setState(() => _busyId = project.id);
+    if (_busyId != null) return;
+    final CancellationToken cancellation = CancellationToken();
+    setState(() {
+      _busyId = project.id;
+      _installProjectId = project.id;
+      _installCancellation = cancellation;
+      _downloadStarted = false;
+      _downloadComplete = false;
+      _downloadReceivedBytes = 0;
+      _downloadTotalBytes = 0;
+      _lastDownloadProgressPaint = null;
+    });
     try {
       final AppState state = AppScope.read(context);
-      final List<ModrinthVersion> versions = await state.modrinth.versions(project.id);
+      final List<ModrinthVersion> versions = _tab == 1
+          ? await state.installer.requestVersions(
+              project,
+              server: widget.config,
+              cancellation: cancellation,
+            )
+          : await state.modrinth.versions(project.id, cancellation: cancellation);
+      cancellation.throwIfCancelled();
       final List<ModrinthVersion> compatible = versions.where(_compatible).toList();
       final List<ModrinthVersion> rejected = versions.where((ModrinthVersion v) => !_compatible(v)).toList();
       if (!mounted) return;
@@ -208,47 +347,229 @@ class _ModsViewState extends State<ModsView> {
       }
       final ModrinthVersion? choice = await _pickVersion(project, compatible, rejected);
       if (choice == null || !mounted) return;
-      final ModrinthVersionFile? file = choice.primaryFile;
-      if (file == null) {
-        showNovaToast(context, L10n.t('modInstallFailed'), kind: ToastKind.error);
-        return;
+      cancellation.throwIfCancelled();
+
+      if (_tab == 1) {
+        // The plugin installer re-reads server.json before downloading, then
+        // verifies the exact size and Git blob hash inside the plugins folder.
+        await state.installer.install(
+          project: project,
+          version: choice,
+          expectedServer: widget.config,
+          branch: _branch,
+          cancellation: cancellation,
+          onDownloadProgress: _onDownloadProgress,
+        );
+      } else {
+        // Keep the existing mods installation behavior; the shared download
+        // API now additionally validates Modrinth's advertised size and hash.
+        await _installModVersion(
+          state,
+          project,
+          choice,
+          cancellation,
+          onDownloadProgress: _onDownloadProgress,
+        );
       }
-      setState(() => _busyId = project.id);
-      final Uint8List bytes = await state.modrinth.download(file.url);
-      final String target = '$_folder/${file.filename}';
-      DirEntry? previous = _installedEntry(project);
+      if (!mounted) return;
+      showNovaToast(
+        context,
+        L10n.f('modQueuedSuccess', <String, String>{'name': project.title}),
+        kind: ToastKind.success,
+      );
+      await _refreshInstalled();
+      if (!mounted) return;
+      setState(() => _browse = false);
+    } on OperationCancelledException {
+      if (mounted) showNovaToast(context, L10n.t('modInstallCancelled'), kind: ToastKind.info);
+    } on ModrinthInstallException catch (error) {
+      if (!mounted) return;
+      final String message = error.cause is ModrinthDownloadLimitException ? L10n.t('modDownloadTooLarge') : error.message;
+      final String details = '${L10n.t(_installStageKey(error.stage))}: $message';
+      showNovaToast(context, L10n.f('modInstallFailed', <String, String>{'error': details}), kind: ToastKind.error);
+    } catch (error) {
+      if (!mounted) return;
+      final String message = error is ModrinthDownloadLimitException ? L10n.t('modDownloadTooLarge') : Fmt.error(error);
+      showNovaToast(
+        context,
+        L10n.f('modInstallFailed', <String, String>{'error': message}),
+        kind: ToastKind.error,
+      );
+    } finally {
+      if (mounted && identical(_installCancellation, cancellation)) {
+        setState(() {
+          _busyId = null;
+          _installProjectId = null;
+          _installCancellation = null;
+          _downloadStarted = false;
+          _downloadComplete = false;
+          _downloadReceivedBytes = 0;
+          _downloadTotalBytes = 0;
+          _lastDownloadProgressPaint = null;
+        });
+      }
+    }
+  }
+
+  Future<void> _installModVersion(
+    AppState state,
+    ModrinthProject project,
+    ModrinthVersion version,
+    CancellationToken cancellation, {
+    ModrinthDownloadProgress? onDownloadProgress,
+  }) async {
+    final ModrinthVersionFile? file = version.primaryFile;
+    if (file == null ||
+        !file.filename.toLowerCase().endsWith('.jar') ||
+        file.filename.contains('/') ||
+        file.filename.contains('\\')) {
+      throw const ModrinthInstallException(
+        ModrinthInstallStage.validation,
+        'Modrinth did not provide one safe JAR file for this version.',
+      );
+    }
+    final Uint8List bytes = await state.modrinth.download(
+      file,
+      cancellation: cancellation,
+      onProgress: onDownloadProgress,
+    );
+    cancellation.throwIfCancelled();
+    final String target = '$_folder/${file.filename}';
+    final String? existingSha;
+    try {
+      existingSha = await state.api.fileSha(
+        widget.config.repoOwner,
+        widget.config.repoName,
+        target,
+        branch: _branch,
+        abortTrigger: cancellation.whenCancelled,
+      );
+    } catch (error) {
+      if (cancellation.isCancelled) throw const OperationCancelledException();
+      rethrow;
+    }
+    try {
       await state.api.putFile(
         widget.config.repoOwner,
         widget.config.repoName,
         target,
         bytes,
-        'nova: install ${project.slug} ${choice.versionNumber}',
+        'nova: install ${project.slug} ${version.versionNumber}',
+        sha: existingSha,
         branch: _branch,
+        abortTrigger: cancellation.whenCancelled,
       );
-      if (previous != null && previous.name != file.filename) {
-        try {
-          await state.api.deleteFile(
-            widget.config.repoOwner,
-            widget.config.repoName,
-            previous.path,
-            previous.sha,
-            'nova: replace ${previous.name}',
-            branch: _branch,
-          );
-        } catch (_) {
-          // The new jar is installed; the old one can be removed manually.
-        }
-      }
-      if (!mounted) return;
-      showNovaToast(context, L10n.t('modInstallSuccess'), kind: ToastKind.success);
-      await _refreshInstalled();
-      setState(() => _browse = false);
     } catch (error) {
-      if (!mounted) return;
-      showNovaToast(context, Fmt.error(error), kind: ToastKind.error);
-    } finally {
-      if (mounted) setState(() => _busyId = null);
+      if (cancellation.isCancelled) throw const OperationCancelledException();
+      rethrow;
     }
+    final DirEntry? previous = _installedEntry(project);
+    if (previous != null && previous.path != target && previous.name != file.filename) {
+      try {
+        await state.api.deleteFile(
+          widget.config.repoOwner,
+          widget.config.repoName,
+          previous.path,
+          previous.sha,
+          'nova: replace ${previous.name}',
+          branch: _branch,
+        );
+      } catch (_) {
+        // Preserve the existing best-effort replacement behavior for mods.
+      }
+    }
+  }
+
+  String _installStageKey(ModrinthInstallStage stage) {
+    switch (stage) {
+      case ModrinthInstallStage.versionLookup:
+        return 'modInstallStageVersions';
+      case ModrinthInstallStage.configuration:
+        return 'modInstallStageConfig';
+      case ModrinthInstallStage.compatibility:
+        return 'modInstallStageCompatibility';
+      case ModrinthInstallStage.download:
+        return 'modInstallStageDownload';
+      case ModrinthInstallStage.validation:
+        return 'modInstallStageValidation';
+      case ModrinthInstallStage.upload:
+        return 'modInstallStageUpload';
+      case ModrinthInstallStage.repositoryVerification:
+        return 'modInstallStageVerify';
+    }
+  }
+
+  void _cancelInstall() {
+    final CancellationToken? cancellation = _installCancellation;
+    if (cancellation == null || cancellation.isCancelled) return;
+    cancellation.cancel();
+    setState(() {});
+  }
+
+  void _onDownloadProgress(int receivedBytes, int totalBytes, bool complete) {
+    if (!mounted || _installCancellation?.isCancelled == true) return;
+    final DateTime now = DateTime.now();
+    final DateTime? lastPaint = _lastDownloadProgressPaint;
+    if (_downloadStarted && !complete && receivedBytes != 0 && lastPaint != null && now.difference(lastPaint).inMilliseconds < 100) {
+      return;
+    }
+    _lastDownloadProgressPaint = now;
+    setState(() {
+      _downloadStarted = true;
+      _downloadComplete = complete;
+      _downloadReceivedBytes = receivedBytes;
+      _downloadTotalBytes = totalBytes;
+    });
+  }
+
+  Widget _downloadProgressPanel() {
+    final p = context.nova;
+    final double? progress = _downloadComplete
+        ? 1
+        : (_downloadTotalBytes > 0 ? _downloadReceivedBytes / _downloadTotalBytes : null);
+    final String label;
+    if (_downloadComplete) {
+      label = L10n.f('modDownloadComplete', <String, String>{'size': Fmt.bytes(_downloadReceivedBytes)});
+    } else if (_downloadTotalBytes > 0) {
+      final int percent = (_downloadReceivedBytes * 100 ~/ _downloadTotalBytes).clamp(0, 100).toInt();
+      label = L10n.f('modDownloadProgress', <String, String>{
+        'received': Fmt.bytes(_downloadReceivedBytes),
+        'total': Fmt.bytes(_downloadTotalBytes),
+        'percent': '$percent',
+      });
+    } else {
+      label = L10n.f('modDownloadProgressUnknown', <String, String>{'received': Fmt.bytes(_downloadReceivedBytes)});
+    }
+    return Container(
+      padding: const EdgeInsets.all(11),
+      decoration: BoxDecoration(
+        color: p.cardSoft,
+        borderRadius: NovaRadii.rMd,
+        border: Border.all(color: p.primaryBright.withValues(alpha: 0.24)),
+      ),
+      child: Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          Row(
+            children: <Widget>[
+              Icon(_downloadComplete ? Icons.download_done_rounded : Icons.download_rounded, size: 16, color: p.primaryBright),
+              const SizedBox(width: 7),
+              Expanded(child: Text(label, maxLines: 1, overflow: TextOverflow.ellipsis, style: NovaTextStyles.caption(p.text))),
+            ],
+          ),
+          const SizedBox(height: 7),
+          ClipRRect(
+            borderRadius: BorderRadius.circular(6),
+            child: LinearProgressIndicator(
+              value: progress,
+              minHeight: 5,
+              backgroundColor: p.stroke,
+              valueColor: AlwaysStoppedAnimation<Color>(p.primaryBright),
+            ),
+          ),
+        ],
+      ),
+    );
   }
 
   /// Lists every incompatible version with its concrete rejection reason.
@@ -394,6 +715,7 @@ class _ModsViewState extends State<ModsView> {
   }
 
   Future<void> _remove(DirEntry entry) async {
+    if (_busyId != null) return;
     final bool ok = await showNovaConfirm(
       context,
       title: L10n.t('modRemoveTitle'),
@@ -402,7 +724,7 @@ class _ModsViewState extends State<ModsView> {
       danger: true,
       icon: Icons.delete_outline_rounded,
     );
-    if (!ok || !mounted) return;
+    if (!ok || !mounted || _busyId != null) return;
     setState(() => _busyId = entry.path);
     try {
       final AppState state = AppScope.read(context);
@@ -455,6 +777,7 @@ class _ModsViewState extends State<ModsView> {
             labels: <String>[L10n.t('modsTab'), L10n.t('pluginsTab')],
             index: _tab,
             onChanged: (int i) {
+              if (_busyId != null) return;
               setState(() {
                 _tab = i;
                 _loader = _defaultLoader(i);
@@ -516,7 +839,7 @@ class _ModsViewState extends State<ModsView> {
   /// never modified or renamed beyond its own name, and it is rejected when the
   /// server type cannot load it.
   Future<void> _uploadJar() async {
-    if (!_supported) return;
+    if (!_supported || _busyId != null) return;
     final FilePickerResult? result = await FilePicker.platform.pickFiles(
       type: FileType.custom,
       allowedExtensions: <String>['jar'],
@@ -547,7 +870,11 @@ class _ModsViewState extends State<ModsView> {
         branch: _branch,
       );
       if (!mounted) return;
-      showNovaToast(context, L10n.t('uploadedFile'), kind: ToastKind.success);
+      showNovaToast(
+        context,
+        L10n.f('modQueuedSuccess', <String, String>{'name': file.name}),
+        kind: ToastKind.success,
+      );
       await _refreshInstalled();
     } catch (error) {
       if (!mounted) return;
@@ -608,7 +935,7 @@ class _ModsViewState extends State<ModsView> {
             ),
             const SizedBox(width: 6),
             NovaChip(
-              label: L10n.f('installedCount', <String, String>{'count': '${_installed.length}'}),
+              label: L10n.f('modRepoFilesCount', <String, String>{'count': '${_installed.length}'}),
               selected: !_browse,
               onTap: () => setState(() => _browse = false),
               icon: Icons.download_done_rounded,
@@ -627,6 +954,10 @@ class _ModsViewState extends State<ModsView> {
           ],
         ),
         const SizedBox(height: 10),
+        if (_downloadStarted) ...<Widget>[
+          _downloadProgressPanel(),
+          const SizedBox(height: 8),
+        ],
         Expanded(
           child: _searchError != null
               ? ErrorState(message: _searchError!, onRetry: _search, compact: true)
@@ -635,7 +966,7 @@ class _ModsViewState extends State<ModsView> {
                   : _results.isEmpty
                       ? EmptyState(
                           title: L10n.t('modNoResults'),
-                          body: L10n.t('modBrowseError'),
+                          body: L10n.t('modNoResultsBody'),
                           icon: Icons.search_off_rounded,
                           compact: true,
                         )
@@ -674,13 +1005,14 @@ class _ModsViewState extends State<ModsView> {
   Widget _projectCard(ModrinthProject project) {
     final p = context.nova;
     final DirEntry? installed = _installedEntry(project);
+    final bool synced = installed != null && _isSyncedToRunner(installed);
     final bool busy = _busyId == project.id;
     return Container(
       padding: const EdgeInsets.all(13),
       decoration: BoxDecoration(
         gradient: NovaGradients.card(p),
         borderRadius: NovaRadii.rLg,
-        border: Border.all(color: installed != null ? p.success.withValues(alpha: 0.28) : p.stroke),
+          border: Border.all(color: synced ? p.success.withValues(alpha: 0.28) : (installed != null ? p.warning.withValues(alpha: 0.24) : p.stroke)),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
@@ -724,7 +1056,12 @@ class _ModsViewState extends State<ModsView> {
                           ),
                         ),
                         if (installed != null)
-                          Pill(label: L10n.t('modInstalled'), tone: PillTone.success, dense: true, icon: Icons.check_rounded),
+                          Pill(
+                            label: L10n.t(_syncLabel(installed)),
+                            tone: synced ? PillTone.success : (_runtime?.jarSyncStatus == 'failed' ? PillTone.danger : PillTone.warning),
+                            dense: true,
+                            icon: synced ? Icons.check_rounded : Icons.hourglass_empty_rounded,
+                          ),
                       ],
                     ),
                     const SizedBox(height: 2),
@@ -761,7 +1098,25 @@ class _ModsViewState extends State<ModsView> {
               ),
               const Spacer(),
               if (busy)
-                const SizedBox(width: 22, height: 22, child: NovaLoader(size: 22, stroke: 2))
+                _installProjectId == project.id && _installCancellation != null
+                    ? Row(
+                        mainAxisSize: MainAxisSize.min,
+                        children: <Widget>[
+                          const SizedBox(width: 22, height: 22, child: NovaLoader(size: 22, stroke: 2)),
+                          IconButton(
+                            tooltip: L10n.t('cancel'),
+                            onPressed: _installCancellation!.isCancelled ? null : _cancelInstall,
+                            padding: EdgeInsets.zero,
+                            constraints: const BoxConstraints.tightFor(width: 34, height: 34),
+                            icon: Icon(
+                              _installCancellation!.isCancelled ? Icons.hourglass_top_rounded : Icons.close_rounded,
+                              size: 18,
+                              color: p.warning,
+                            ),
+                          ),
+                        ],
+                      )
+                    : const SizedBox(width: 22, height: 22, child: NovaLoader(size: 22, stroke: 2))
               else
                 NovaButton(
                   label: installed == null ? L10n.t('install') : L10n.t('update'),
@@ -793,12 +1148,21 @@ class _ModsViewState extends State<ModsView> {
             ),
             const SizedBox(width: 6),
             NovaChip(
-              label: L10n.f('installedCount', <String, String>{'count': '${_installed.length}'}),
+              label: L10n.f('modRepoFilesCount', <String, String>{'count': '${_installed.length}'}),
               selected: true,
               onTap: () {},
               icon: Icons.download_done_rounded,
             ),
             const Spacer(),
+            if (_installCancellation != null && !_installCancellation!.isCancelled)
+              NovaIconButton(
+                icon: Icons.close_rounded,
+                size: 32,
+                iconSize: 16,
+                accent: p.warning,
+                onTap: _cancelInstall,
+                tooltip: L10n.t('cancel'),
+              ),
             NovaIconButton(
               icon: Icons.refresh_rounded,
               size: 32,
@@ -813,6 +1177,12 @@ class _ModsViewState extends State<ModsView> {
           L10n.f('modsFolderLabel', <String, String>{'folder': _folder}),
           style: NovaTextStyles.caption(p.textDim),
         ),
+        const SizedBox(height: 7),
+        InfoBanner(body: L10n.t('modRunnerSyncInfo'), dense: true, color: p.primaryBright),
+        if (_downloadStarted) ...<Widget>[
+          const SizedBox(height: 8),
+          _downloadProgressPanel(),
+        ],
         const SizedBox(height: 10),
         Expanded(
           child: _loadingInstalled && _installed.isEmpty
@@ -863,6 +1233,13 @@ class _ModsViewState extends State<ModsView> {
                                         ),
                                         const SizedBox(height: 2),
                                         Text(Fmt.bytes(entry.size), style: NovaTextStyles.caption(p.textDim)),
+                                        const SizedBox(height: 2),
+                                        Text(
+                                          L10n.t(_syncLabel(entry)),
+                                          style: NovaTextStyles.caption(
+                                            _isSyncedToRunner(entry) ? p.success : (_runtime?.jarSyncStatus == 'failed' ? p.danger : p.warning),
+                                          ),
+                                        ),
                                       ],
                                     ),
                                   ),

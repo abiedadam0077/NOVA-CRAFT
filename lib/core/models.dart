@@ -172,6 +172,7 @@ class ReleaseInfo {
     required this.assets,
     required this.prerelease,
     required this.isDraft,
+    this.body = '',
   });
 
   final int id;
@@ -181,8 +182,21 @@ class ReleaseInfo {
   final List<ReleaseAsset> assets;
   final bool prerelease;
   final bool isDraft;
+  final String body;
 
   int get totalSize => assets.fold(0, (sum, a) => sum + a.size);
+  ReleaseAsset? get backupArchive => _assetNamed('world-backup.zip');
+  ReleaseAsset? get backupChecksum => _assetNamed('world-backup.sha256');
+  bool get hasBackupAssets => backupArchive != null && backupChecksum != null;
+  bool isBackupFor(String serverId) => !isDraft && tag.startsWith('backup-$serverId-') && hasBackupAssets;
+  bool get isVerifiedBackup => hasBackupAssets && body.contains('NOVA_CRAFT_BACKUP_VERIFIED');
+
+  ReleaseAsset? _assetNamed(String name) {
+    for (final ReleaseAsset asset in assets) {
+      if (asset.name == name && asset.size > 0) return asset;
+    }
+    return null;
+  }
 
   DateTime? get createdAtDate => DateTime.tryParse(createdAt)?.toLocal();
 
@@ -209,6 +223,7 @@ class ReleaseInfo {
       assets: assets,
       prerelease: o['prerelease'] as bool? ?? false,
       isDraft: o['draft'] as bool? ?? false,
+      body: o['body']?.toString() ?? '',
     );
   }
 }
@@ -330,7 +345,9 @@ class ServerConfig {
     this.playitJavaPort = 25565,
     this.playitBedrockPort = 19132,
     this.playitTunnelName = '',
+    this.playitTunnelId = '',
     this.autoRestart = true,
+    this.backupRetention = 10,
     this.createdAt = '',
     this.allowCommands = true,
     this.eulaAccepted = false,
@@ -365,7 +382,9 @@ class ServerConfig {
   final int playitJavaPort;
   final int playitBedrockPort;
   final String playitTunnelName;
+  final String playitTunnelId;
   final bool autoRestart;
+  final int backupRetention;
   final String createdAt;
   final bool allowCommands;
   final bool eulaAccepted;
@@ -448,7 +467,9 @@ class ServerConfig {
     int? playitJavaPort,
     int? playitBedrockPort,
     String? playitTunnelName,
+    String? playitTunnelId,
     bool? autoRestart,
+    int? backupRetention,
     String? createdAt,
     bool? allowCommands,
     bool? eulaAccepted,
@@ -483,7 +504,9 @@ class ServerConfig {
       playitJavaPort: playitJavaPort ?? this.playitJavaPort,
       playitBedrockPort: playitBedrockPort ?? this.playitBedrockPort,
       playitTunnelName: playitTunnelName ?? this.playitTunnelName,
+      playitTunnelId: playitTunnelId ?? this.playitTunnelId,
       autoRestart: autoRestart ?? this.autoRestart,
+      backupRetention: backupRetention ?? this.backupRetention,
       createdAt: createdAt ?? this.createdAt,
       allowCommands: allowCommands ?? this.allowCommands,
       eulaAccepted: eulaAccepted ?? this.eulaAccepted,
@@ -521,7 +544,9 @@ class ServerConfig {
         'playitJavaPort': playitJavaPort,
         'playitBedrockPort': playitBedrockPort,
         'playitTunnelName': playitTunnelName,
+        'playitTunnelId': playitTunnelId,
         'autoRestart': autoRestart,
+        'backupRetention': backupRetention,
         'createdAt': createdAt,
         'allowCommands': allowCommands,
         'eulaAccepted': eulaAccepted,
@@ -580,7 +605,9 @@ class ServerConfig {
       playitJavaPort: integer('playitJavaPort', 25565),
       playitBedrockPort: integer('playitBedrockPort', 19132),
       playitTunnelName: str('playitTunnelName'),
+      playitTunnelId: str('playitTunnelId'),
       autoRestart: boolean('autoRestart', true),
+      backupRetention: integer('backupRetention', 10).clamp(2, 30).toInt(),
       createdAt: str('createdAt'),
       allowCommands: boolean('allowCommands', true),
       eulaAccepted: hasFlag ? boolean('eulaAccepted', false) : str('edition', 'JAVA').toUpperCase() != 'BEDROCK',
@@ -613,9 +640,24 @@ class ServerRuntime {
     this.gamePort,
     this.rssMb,
     this.tunnelName = '',
+    this.tunnelId = '',
     this.tunnelProtocol = '',
     this.tunnelOfflineReasons = const <String>[],
+    this.tunnelLocalIp = '',
+    this.tunnelLocalPort,
     this.agentId = '',
+    this.agentStatus = 'unknown',
+    this.agentDiagnostic = '',
+    this.agentExitCode = 'not_started',
+    this.playitSecretStatus = 'unknown',
+    this.serverPortStatus = 'unknown',
+    this.agentLogTail = '',
+    this.tunnelDiagnostic = '',
+    this.fileManifestStatus = 'unknown',
+    this.fileSnapshotStatus = 'unknown',
+    this.jarSyncStatus = 'unknown',
+    this.jarSyncAt = '',
+    this.managedJarShas = const <String, String>{},
   });
 
   final String phase; // starting | ready | stopping | stopped | failed | unknown
@@ -626,7 +668,7 @@ class ServerRuntime {
   final String version;
   final String motd;
   final int? latencyMs;
-  final String tunnelStatus; // connected | connecting | missing | error | unknown
+  final String tunnelStatus; // connected | connecting | allocated | not_created | unsupported | address_unavailable | server_port_not_listening | origin_mismatch | selection_required | disabled | error | unknown
   final String tunnelMessage;
   /// Public `host:port` the Playit agent reported. Empty until the agent has
   /// actually been assigned a tunnel — never synthesised.
@@ -638,14 +680,32 @@ class ServerRuntime {
   final int? gamePort;
   final int? rssMb;
   final String tunnelName;
+  final String tunnelId;
   final String tunnelProtocol;
   final List<String> tunnelOfflineReasons;
+  final String tunnelLocalIp;
+  final int? tunnelLocalPort;
   final String agentId;
+  final String agentStatus; // not_started | starting | connected | failed | stopped
+  final String agentDiagnostic;
+  /// Numeric process exit status when the official Agent exited naturally.
+  /// Non-numeric values describe a lifecycle state (running/not_started).
+  final String agentExitCode;
+  final String playitSecretStatus; // saved | missing | unknown
+  final String serverPortStatus; // listening | not_listening | unknown
+  final String agentLogTail; // bounded and redacted by the runner
+  final String tunnelDiagnostic;
+  final String fileManifestStatus; // published | generation_failed | publish_failed | unknown
+  final String fileSnapshotStatus;
+  final String jarSyncStatus; // synced | failed | not_applicable | unknown
+  final String jarSyncAt;
+  final Map<String, String> managedJarShas;
 
   DateTime? get updatedAtDate => DateTime.tryParse(updatedAt)?.toLocal();
 
   bool get online => ready && phase == 'ready';
   bool get tunnelConnected => tunnelStatus == 'connected';
+  bool get agentConnected => agentStatus == 'connected';
 
   Duration? get uptime {
     final DateTime? start = DateTime.tryParse(cycleStartedAt);
@@ -659,6 +719,21 @@ class ServerRuntime {
       final v = o[key];
       if (v is num) return v.toInt();
       return int.tryParse(v?.toString() ?? '');
+    }
+
+    final Map<String, String> managedJarShas = <String, String>{};
+    final dynamic rawJarShas = o['managedJarShas'];
+    if (rawJarShas is Map) {
+      for (final dynamic entry in rawJarShas.entries) {
+        final String path = entry.key.toString();
+        final String sha = entry.value.toString().toLowerCase();
+        final bool inAddonFolder = path.startsWith('mods/') || path.startsWith('plugins/');
+        final bool safePath = inAddonFolder &&
+            !path.contains('\\') &&
+            !path.split('/').any((String part) => part.isEmpty || part == '.' || part == '..') &&
+            path.toLowerCase().endsWith('.jar');
+        if (safePath && RegExp(r'^[0-9a-f]{40}$').hasMatch(sha)) managedJarShas[path] = sha;
+      }
     }
 
     return ServerRuntime(
@@ -680,9 +755,24 @@ class ServerRuntime {
       gamePort: numOrNull('gamePort'),
       rssMb: numOrNull('rssMb'),
       tunnelName: o['tunnelName']?.toString() ?? '',
+      tunnelId: o['tunnelId']?.toString() ?? '',
       tunnelProtocol: o['tunnelProtocol']?.toString() ?? '',
       tunnelOfflineReasons: (o['tunnelOfflineReasons'] as List?)?.map((dynamic e) => e.toString()).toList() ?? const <String>[],
+      tunnelLocalIp: o['tunnelLocalIp']?.toString() ?? '',
+      tunnelLocalPort: numOrNull('tunnelLocalPort'),
       agentId: o['agentId']?.toString() ?? '',
+      agentStatus: o['agentStatus']?.toString() ?? 'unknown',
+      agentDiagnostic: o['agentDiagnostic']?.toString() ?? '',
+      agentExitCode: o['agentExitCode']?.toString() ?? 'not_started',
+      playitSecretStatus: o['playitSecretStatus']?.toString() ?? 'unknown',
+      serverPortStatus: o['serverPortStatus']?.toString() ?? 'unknown',
+      agentLogTail: o['agentLogTail']?.toString() ?? '',
+      tunnelDiagnostic: o['tunnelDiagnostic']?.toString() ?? '',
+      fileManifestStatus: o['fileManifestStatus']?.toString() ?? 'unknown',
+      fileSnapshotStatus: o['fileSnapshotStatus']?.toString() ?? 'unknown',
+      jarSyncStatus: o['jarSyncStatus']?.toString() ?? 'unknown',
+      jarSyncAt: o['jarSyncAt']?.toString() ?? '',
+      managedJarShas: managedJarShas,
     );
   }
 }

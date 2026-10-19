@@ -5,6 +5,7 @@ import 'package:url_launcher/url_launcher.dart';
 import '../../core/config.dart';
 import '../../core/formatters.dart';
 import '../../core/models.dart';
+import '../../core/playit_api.dart';
 import '../../core/provisioner.dart';
 import '../../core/strings.dart';
 import '../../design/theme.dart';
@@ -19,7 +20,11 @@ import '../../design/widgets/surfaces.dart';
 import '../../state/app_state.dart';
 
 class CreateServerScreen extends StatefulWidget {
-  const CreateServerScreen({super.key, this.onCreated});
+  const CreateServerScreen({super.key, this.onCreated, this.initialRepo, this.lockRepository = false});
+
+  /// Optional repository selected earlier in the guided first-run flow.
+  final GhRepo? initialRepo;
+  final bool lockRepository;
 
   /// Called after the repository is provisioned. The route then pops back to
   /// the root so the main shell (which requires a server) can take over.
@@ -52,6 +57,11 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
   String _branch = 'main';
   bool _repoPrivate = true;
 
+  bool _loadingPlayit = false;
+  PlayitAgentState? _playitAgent;
+  String? _playitLoadError;
+  String? _selectedTunnelId;
+
   int _memoryMb = 4096;
   int _players = 20;
   int _viewDistance = 10;
@@ -69,6 +79,13 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
   @override
   void initState() {
     super.initState();
+    final GhRepo? initial = widget.initialRepo;
+    if (initial != null) {
+      _repoMode = 'existing';
+      _repoFull = initial.fullName;
+      _branch = initial.defaultBranch.isEmpty ? 'main' : initial.defaultBranch;
+      _repoPrivate = initial.private;
+    }
     WidgetsBinding.instance.addPostFrameCallback((_) => _loadVersions());
   }
 
@@ -79,6 +96,49 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
     _motd.dispose();
     _newRepo.dispose();
     super.dispose();
+  }
+
+  List<PlayitTunnel> get _matchingPlayitTunnels =>
+      _playitAgent?.tunnelsFor(bedrock: _edition == 'BEDROCK') ?? <PlayitTunnel>[];
+
+  List<PlayitTunnel> get _selectablePlayitTunnels =>
+      _matchingPlayitTunnels.where((PlayitTunnel tunnel) => tunnel.id.isNotEmpty).toList();
+
+  bool get _tunnelSelectionRequired => _selectablePlayitTunnels.length > 1;
+
+  void _syncSelectedTunnel() {
+    final List<PlayitTunnel> candidates = _matchingPlayitTunnels;
+    if (_selectedTunnelId != null && candidates.any((PlayitTunnel t) => t.id == _selectedTunnelId)) return;
+    _selectedTunnelId = candidates.length == 1 && candidates.single.id.isNotEmpty ? candidates.single.id : null;
+  }
+
+  Future<void> _loadPlayitTunnels({bool force = false}) async {
+    if (_loadingPlayit) return;
+    if (!force && _playitAgent != null) {
+      setState(_syncSelectedTunnel);
+      return;
+    }
+    setState(() {
+      _loadingPlayit = true;
+      _playitLoadError = null;
+    });
+    try {
+      final PlayitAgentState result = await AppScope.read(context).inspectPlayit();
+      if (!mounted) return;
+      setState(() {
+        _playitAgent = result.ok ? result : null;
+        _playitLoadError = result.ok ? null : result.error;
+        _syncSelectedTunnel();
+      });
+    } catch (error) {
+      if (!mounted) return;
+      setState(() {
+        _playitAgent = null;
+        _playitLoadError = Fmt.error(error);
+      });
+    } finally {
+      if (mounted) setState(() => _loadingPlayit = false);
+    }
   }
 
   Future<void> _loadVersions() async {
@@ -144,14 +204,22 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
     try {
       final AppState state = AppScope.read(context);
       final List<GhInstallation> installations = await state.api.listInstallations();
-      final List<GhRepo> repos = <GhRepo>[];
+      final Map<String, GhRepo> byName = <String, GhRepo>{};
       for (final GhInstallation installation in installations) {
-        repos.addAll(await state.api.listInstallationRepos(installation.id));
+        for (final GhRepo repo in await state.api.listInstallationRepos(installation.id)) {
+          if (repo.permissionsPush) byName[repo.fullName] = repo;
+        }
       }
+      final List<GhRepo> repos = byName.values.toList()
+        ..sort((GhRepo a, GhRepo b) => a.fullName.toLowerCase().compareTo(b.fullName.toLowerCase()));
       if (!mounted) return;
       setState(() {
         _repos = repos;
-        if (_repoFull == null && repos.isNotEmpty) _repoFull = repos.first.fullName;
+        if (widget.initialRepo != null) {
+          _repoFull = widget.initialRepo!.fullName;
+        } else if (_repoFull == null && repos.isNotEmpty) {
+          _repoFull = repos.first.fullName;
+        }
       });
     } catch (error) {
       if (!mounted) return;
@@ -165,6 +233,9 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
     HapticFeedback.selectionClick();
     if (_step == 0) {
       _loadVersions();
+    }
+    if (_step == 1) {
+      _loadPlayitTunnels();
     }
     if (_step == 2) {
       _loadRepos();
@@ -196,7 +267,8 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
       case 1:
         return _version.isNotEmpty;
       case 2:
-        return _name.text.trim().isNotEmpty && _repoReady;
+        return !_loadingPlayit && _name.text.trim().isNotEmpty && _repoReady &&
+            !(_tunnelSelectionRequired && _selectedTunnelId == null);
       default:
         return true;
     }
@@ -204,8 +276,10 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
 
   String? get _validationHint {
     if (_step == 2) {
+      if (_loadingPlayit) return L10n.t('playitLoadingTunnels');
       if (_name.text.trim().isEmpty) return L10n.t('nameRequired');
       if (!_repoReady) return _repoMode == 'existing' ? L10n.t('selectRepoRequired') : L10n.t('repoRequired');
+      if (_tunnelSelectionRequired && _selectedTunnelId == null) return L10n.t('selectPlayitTunnel');
     }
     if (_step == 1 && _version.isEmpty) return L10n.t('versionRequired');
     return null;
@@ -231,6 +305,7 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
       motd: _motd.text.trim().isEmpty ? 'A NOVA CRAFT Server' : _motd.text.trim(),
       memoryMb: _memoryMb,
       playitAddress: '',
+      playitTunnelId: _selectedTunnelId ?? '',
       eulaAccepted: _eula && _edition == 'JAVA',
       createdAt: DateTime.now().toUtc().toIso8601String(),
     );
@@ -318,7 +393,7 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
       _doneSteps = <String>[..._doneSteps, 'files'];
 
       setState(() => _progress = L10n.t('provisioningPlayit'));
-      final bool secretInstalled = await state.installPlayitSecret(config);
+      final bool secretInstalled = !state.playitSkipped && await state.installPlayitSecret(config);
       if (secretInstalled) _doneSteps = <String>[..._doneSteps, 'playit'];
       setState(() => _progress = L10n.t('provisioningDispatch'));
 
@@ -328,6 +403,7 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
       }
       state.upsertServer(config);
       await state.refreshServers();
+      if (widget.lockRepository) state.clearPendingRepo();
       if (!mounted) return;
       setState(() {
         _progress = L10n.t('provisioningDone');
@@ -366,6 +442,10 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
     state.api.rememberBranch(owner, repo, _branch);
     try {
       final GhRepo full = await state.api.getRepo(owner, repo);
+      if (!full.permissionsPush) {
+        if (mounted) setState(() => _createError = L10n.t('repoNoWriteAccess'));
+        return false;
+      }
       _branch = full.defaultBranch.isEmpty ? _branch : full.defaultBranch;
       state.api.rememberBranch(owner, repo, _branch);
       final List<GhInstallation> installations = await state.api.listInstallations();
@@ -488,7 +568,7 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
                                 )
                               : NovaButton(
                                   label: L10n.t('next'),
-                                  trailingIcon: Icons.arrow_forward_rounded,
+                                  trailingIcon: context.isRtl ? Icons.arrow_back_rounded : Icons.arrow_forward_rounded,
                                   onPressed: _stepValid ? _next : null,
                                 ),
                         ),
@@ -576,6 +656,8 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
       _versions = <String>[];
       _version = '';
       _eula = edition == 'BEDROCK';
+      _selectedTunnelId = null;
+      _syncSelectedTunnel();
     });
     _loadVersions();
   }
@@ -666,6 +748,74 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
     );
   }
 
+  Widget _playitTunnelSelector() {
+    final p = context.nova;
+    final List<PlayitTunnel> matches = _matchingPlayitTunnels;
+    final List<PlayitTunnel> options = _selectablePlayitTunnels;
+    final List<PlayitTunnel> selectedItems = options.where((PlayitTunnel tunnel) => tunnel.id == _selectedTunnelId).toList();
+    final PlayitTunnel? selected = selectedItems.isEmpty ? null : selectedItems.first;
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        Row(
+          children: <Widget>[
+            Expanded(child: Text(L10n.t('playitTunnelSelectionTitle'), style: NovaTextStyles.title(p.text))),
+            NovaIconButton(
+              icon: Icons.refresh_rounded,
+              tooltip: L10n.t('refresh'),
+              onTap: _loadingPlayit ? null : () => _loadPlayitTunnels(force: true),
+            ),
+          ],
+        ),
+        const SizedBox(height: 6),
+        Text(L10n.t('playitTunnelSelectionBody'), style: NovaTextStyles.caption(p.textMuted)),
+        const SizedBox(height: 10),
+        if (_loadingPlayit)
+          const LinearProgressIndicator(minHeight: 2)
+        else if (_playitAgent != null && matches.isEmpty)
+          InfoBanner(
+            body: _playitAgent!.tunnels.isEmpty ? L10n.t('playitNoTunnelsYet') : L10n.t('playitNoMatchingTunnel'),
+            icon: Icons.info_outline_rounded,
+            color: p.warning,
+            dense: true,
+          )
+        else if (_playitAgent != null && _tunnelSelectionRequired)
+          NovaDropdown<String>(
+            label: L10n.t('selectPlayitTunnel'),
+            value: _selectedTunnelId,
+            items: options.map((PlayitTunnel tunnel) {
+              final String title = tunnel.name.isEmpty ? tunnel.id : tunnel.name;
+              final String subtitle = tunnel.address.isEmpty ? tunnel.id : tunnel.address;
+              return DropdownMenuItem<String>(
+                value: tunnel.id,
+                child: Text('$title · $subtitle', maxLines: 1, overflow: TextOverflow.ellipsis),
+              );
+            }).toList(),
+            onChanged: (String? value) => setState(() => _selectedTunnelId = value),
+          )
+        else if (selected != null)
+          InfoRow(
+            label: L10n.t('selectedPlayitTunnel'),
+            value: selected.address.isEmpty ? (selected.name.isEmpty ? selected.id : selected.name) : selected.address,
+            monospace: selected.address.isNotEmpty,
+          )
+        else if (_playitLoadError != null)
+          InfoBanner(
+            body: Fmt.playitError(_playitLoadError ?? ''),
+            icon: Icons.info_outline_rounded,
+            color: p.warning,
+            dense: true,
+          )
+        else
+          InfoBanner(body: L10n.t('playitManualAddressNote'), icon: Icons.info_outline_rounded, color: p.textMuted, dense: true),
+        if (_playitAgent != null && matches.isNotEmpty && matches.any((PlayitTunnel tunnel) => tunnel.id.isEmpty)) ...<Widget>[
+          const SizedBox(height: 8),
+          InfoBanner(body: L10n.t('playitTunnelIdMissing'), icon: Icons.warning_amber_rounded, color: p.warning, dense: true),
+        ],
+      ],
+    );
+  }
+
   Widget _settingsStep() {
     final p = context.nova;
     return _body(
@@ -687,11 +837,19 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
         const SizedBox(height: 18),
         Text(L10n.t('serverRepo'), style: NovaTextStyles.title(p.text)),
         const SizedBox(height: 10),
-        NovaSegmented(
-          labels: <String>[L10n.t('useExistingRepo'), L10n.t('createNewRepo')],
-          index: _repoMode == 'existing' ? 0 : 1,
-          onChanged: (int i) => setState(() => _repoMode = i == 0 ? 'existing' : 'new'),
-        ),
+        if (widget.lockRepository && widget.initialRepo != null)
+          InfoBanner(
+            title: L10n.t('repository'),
+            body: widget.initialRepo!.fullName,
+            icon: Icons.lock_outline_rounded,
+            color: p.primaryBright,
+          )
+        else
+          NovaSegmented(
+            labels: <String>[L10n.t('useExistingRepo'), L10n.t('createNewRepo')],
+            index: _repoMode == 'existing' ? 0 : 1,
+            onChanged: (int i) => setState(() => _repoMode = i == 0 ? 'existing' : 'new'),
+          ),
         const SizedBox(height: 12),
         if (_repoMode == 'existing')
           _repoSelector()
@@ -839,6 +997,8 @@ class _CreateServerScreenState extends State<CreateServerScreen> {
           icon: Icons.hub_rounded,
           color: p.primaryBright,
         ),
+        const SizedBox(height: 18),
+        _playitTunnelSelector(),
         if (_edition == 'JAVA') ...<Widget>[
           const SizedBox(height: 10),
           NovaSwitchTile(

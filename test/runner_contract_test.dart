@@ -18,6 +18,8 @@ void main() {
       'bedrock-unzip',
       'server-crashed',
       'backup-failed',
+      'backup-restore-failed',
+      'invalid-restore-tag',
     ]) {
       test('reason "$reason" is published with a reason', () {
         expect(script.contains('publish_cycle_end failure "$reason"'), isTrue);
@@ -37,9 +39,9 @@ void main() {
       expect(script.contains(r'if [ ! -f "$STOP_FLAG" ] && [ "$AUTORESTART" = "true" ]'), isTrue);
     });
 
-    test('a cycle time limit is shorter than the job timeout', () {
-      expect(script.contains('MAXSEC=17100'), isTrue); // 4h45m of running
-      expect(workflow.contains('timeout-minutes: 330'), isTrue); // 5h30m job
+    test('a five-hour runtime budget stays within the six-hour job limit', () {
+      expect(script.contains('MAXSEC=18000'), isTrue);
+      expect(workflow.contains('timeout-minutes: 360'), isTrue);
     });
   });
 
@@ -48,20 +50,37 @@ void main() {
       final int off = script.indexOf('send_cmd "save-off"');
       final int flush = script.indexOf('send_cmd "save-all flush"');
       final int backup = script.indexOf('if backup_now "cycle"');
-      final int stop = script.indexOf('send_cmd "stop"');
+      final int stop = script.indexOf('send_cmd "stop"', backup);
       expect(off, greaterThan(0));
       expect(flush, greaterThan(off));
       expect(backup, greaterThan(flush));
       expect(stop, greaterThan(backup));
     });
 
-    test('the archive is verified before it is published', () {
-      expect(script.contains('sha256sum world-backup.zip > world-backup.sha256'), isTrue);
+    test('the archive and remote release are verified before retention pruning', () {
+      final int published = script.indexOf(r'gh release download "$tag"');
+      final int verified = script.indexOf('sha256sum -c world-backup.sha256', published);
+      final int pruned = script.indexOf('  prune_backups\n  return 0', verified);
+      expect(script.contains('archive.testzip()'), isTrue);
+      expect(script.contains(r'gh api "repos/$REPO/releases?per_page=100"'), isTrue);
+      expect(script.contains('NOVA_CRAFT_BACKUP_VERIFIED'), isTrue);
+      expect(script.contains('world-backup.zip", "world-backup.sha256'), isTrue);
+      expect(published, greaterThan(0));
+      expect(verified, greaterThan(published));
+      expect(pruned, greaterThan(verified));
       expect(script.contains('world-backup.sha256'), isTrue);
     });
 
     test('a failed backup fails the cycle instead of reporting success', () {
       expect(script.contains('publish_cycle_end failure "backup-failed"'), isTrue);
+    });
+
+    test('failure to publish the backup verification marker is fail-closed', () {
+      final int markerEdit = script.indexOf(r'gh release edit "$tag"');
+      final int refusal = script.indexOf('refusing to count it as a completed backup', markerEdit);
+      expect(markerEdit, greaterThan(0));
+      expect(refusal, greaterThan(markerEdit));
+      expect(script.substring(markerEdit, refusal).contains('return 1'), isTrue);
     });
   });
 
@@ -92,10 +111,61 @@ void main() {
       expect(workflow.contains('if: always()'), isTrue);
     });
 
-    test('restore accepts an explicit tag or the newest backup', () {
+    test('restore accepts only this server’s explicit tag or its newest backup', () {
       expect(script.contains('NOVA_RESTORE_TAG'), isTrue);
-      expect(script.contains('startswith("backup-'), isTrue);
-      expect(script.contains(r'"$SID"'), isTrue);
+      expect(script.contains('invalid-restore-tag'), isTrue);
+      expect(script.contains('startswith(prefix)'), isTrue);
+      expect(script.contains('re.fullmatch(pattern, tag)'), isTrue);
+      expect(script.contains(r'backup-%s-[A-Za-z0-9_-]{2,}'), isTrue);
+      expect(script.contains(r'"backup-$SID-"[A-Za-z0-9_-]'), isFalse);
+      expect(script.contains('NOVA_CRAFT_BACKUP_VERIFIED'), isTrue);
+      expect(script.contains('world-backup.sha256'), isTrue);
+      expect(script.contains('verify_backup_release() {'), isTrue);
+      expect(script.contains(r'gh api "repos/$REPO/releases/tags/$tag"'), isTrue);
+      final int releaseVerified = script.indexOf('verify_backup_release "$REQUESTED_RESTORE_TAG"');
+      final int download = script.indexOf(r'gh release download "$REQUESTED_RESTORE_TAG"');
+      expect(releaseVerified, greaterThan(0));
+      expect(download, greaterThan(releaseVerified));
+    });
+  });
+
+  group('Managed add-ons and world import', () {
+    test('GitHub JARs are synchronized after cache restore and before the Java process starts', () {
+      final int restore = workflow.indexOf('actions/cache/restore');
+      final int runner = workflow.indexOf('bash nova-craft/runner.sh');
+      final int sync = script.indexOf('fileops.py sync-jars');
+      final int java = script.indexOf('java -Xms512M');
+      expect(restore, greaterThanOrEqualTo(0));
+      expect(runner, greaterThan(restore));
+      expect(sync, greaterThan(0));
+      expect(java, greaterThan(sync));
+      expect(script.contains('publish_cycle_end failure "jar-sync-failed"'), isTrue);
+      expect(script.contains('"managedJarShas"'), isTrue);
+    });
+
+    test('world ZIP import validates first and requires a safety backup before replacement', () {
+      final int preflight = script.indexOf('fileops.py validate-import "$DATA_ABS"');
+      final int backup = script.indexOf('backup_now "pre-world-import"');
+      final int importer = script.indexOf('fileops.py import "$DATA_ABS"');
+      expect(preflight, greaterThan(0));
+      expect(backup, greaterThan(preflight));
+      expect(importer, greaterThan(backup));
+      expect(script.contains('put_file "$INCOMING/result.json"'), isTrue);
+      expect(script.contains('WORLD_NAME="Bedrock level"'), isTrue);
+      expect(script.contains('WORLD_NAME="world"'), isTrue);
+      expect(script.contains('world-import-safety-backup-failed'), isTrue);
+      expect(script.contains('result["status"] = "blocked"'), isTrue);
+      expect(script.contains('result["error"] = "safety-backup-failed"'), isTrue);
+      expect(script.contains('publish_import_result "$import_preflight" "nova: world import blocked"'), isTrue);
+      expect(script.contains('current world was left unchanged'), isTrue);
+    });
+
+    test('world import results are published with a processing timestamp', () {
+      expect(script.contains('publish_import_result() {'), isTrue);
+      expect(script.contains('payload["processedAt"]'), isTrue);
+      expect(script.contains('publish_import_result /tmp/nova-import.json'), isTrue);
+      expect(script.contains('publish_import_result "$import_preflight"'), isTrue);
+      expect(script.contains('put_file "$INCOMING/result.json"'), isTrue);
     });
   });
 
@@ -107,6 +177,12 @@ void main() {
       expect(workflow.indexOf('actions/cache/restore'), lessThan(workflow.indexOf('nova-craft/runner.sh')));
       expect(script.contains('python3 nova-craft/config.py --write-props'), isTrue);
       expect(WorkflowTemplates.configScript.contains('--write-props'), isTrue);
+      expect(WorkflowTemplates.configScript.contains('unsafe server dataPath'), isTrue);
+      expect(WorkflowTemplates.configScript.contains('cannot traverse a symbolic link'), isTrue);
+      expect(WorkflowTemplates.configScript.contains('unsafe server id'), isTrue);
+      expect(WorkflowTemplates.configScript.contains('unsupported server edition'), isTrue);
+      expect(WorkflowTemplates.configScript.contains('server runtime settings are outside safe bounds'), isTrue);
+      expect(script.contains('symbolic link'), isTrue);
     });
 
     test('eula is written only when accepted', () {

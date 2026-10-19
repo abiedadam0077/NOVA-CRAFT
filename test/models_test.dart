@@ -19,6 +19,9 @@ void main() {
       maxPlayers: 30,
       memoryMb: 6144,
       playitAddress: 'tcp://island.playit.gg:25570',
+      playitTunnelId: 'java-a',
+      allowCommands: false,
+      backupRetention: 5,
     );
 
     test('connection address strips schemes', () {
@@ -53,6 +56,9 @@ void main() {
       expect(copy.toJson(), config.toJson());
       expect(copy.id, config.id);
       expect(copy.playitAddress, config.playitAddress);
+      expect(copy.playitTunnelId, 'java-a');
+      expect(copy.allowCommands, isFalse);
+      expect(copy.backupRetention, 5);
     });
 
     test('copyWith only replaces named fields', () {
@@ -69,6 +75,70 @@ void main() {
       expect(fabric.supportsPlugins, isFalse);
       expect(fabric.modsFolder, 'mods');
       expect(fabric.serverPath('mods'), 'server/mods');
+    });
+  });
+
+  group('ReleaseInfo backup assets', () {
+    test('backup is eligible only when both archive and checksum exist', () {
+      const ReleaseInfo archiveOnly = ReleaseInfo(
+        id: 1,
+        tag: 'backup-server-1',
+        name: 'Backup',
+        createdAt: '',
+        assets: <ReleaseAsset>[ReleaseAsset(1, 'world-backup.zip', 10, 'https://example.test/archive.zip')],
+        prerelease: false,
+        isDraft: false,
+      );
+      const ReleaseInfo unverified = ReleaseInfo(
+        id: 4,
+        tag: 'backup-server-a-legacy',
+        name: 'Legacy backup',
+        createdAt: '',
+        assets: <ReleaseAsset>[
+          ReleaseAsset(4, 'world-backup.zip', 10, 'https://example.test/archive.zip'),
+          ReleaseAsset(5, 'world-backup.sha256', 64, 'https://example.test/archive.sha256'),
+        ],
+        prerelease: false,
+        isDraft: false,
+        body: 'Legacy backup created before the verification marker existed.',
+      );
+      const ReleaseInfo draft = ReleaseInfo(
+        id: 6,
+        tag: 'backup-server-a-draft',
+        name: 'Draft backup',
+        createdAt: '',
+        assets: <ReleaseAsset>[
+          ReleaseAsset(6, 'world-backup.zip', 10, 'https://example.test/archive.zip'),
+          ReleaseAsset(7, 'world-backup.sha256', 64, 'https://example.test/archive.sha256'),
+        ],
+        prerelease: false,
+        isDraft: true,
+        body: 'NOVA_CRAFT_BACKUP_VERIFIED',
+      );
+      const ReleaseInfo complete = ReleaseInfo(
+        id: 2,
+        tag: 'backup-server-a-20261018T120000000000Z',
+        name: 'Backup',
+        createdAt: '',
+        assets: <ReleaseAsset>[
+          ReleaseAsset(2, 'world-backup.zip', 10, 'https://example.test/archive.zip'),
+          ReleaseAsset(3, 'world-backup.sha256', 64, 'https://example.test/archive.sha256'),
+        ],
+        prerelease: false,
+        isDraft: false,
+        body: 'NOVA_CRAFT_BACKUP_VERIFIED',
+      );
+      expect(archiveOnly.hasBackupAssets, isFalse);
+      expect(complete.hasBackupAssets, isTrue);
+      expect(unverified.isVerifiedBackup, isFalse);
+      expect(unverified.isBackupFor('server-a'), isTrue);
+      expect(complete.isVerifiedBackup, isTrue);
+      expect(complete.backupArchive?.name, 'world-backup.zip');
+      expect(complete.backupChecksum?.name, 'world-backup.sha256');
+      expect(complete.isBackupFor('server-a'), isTrue);
+      expect(complete.isBackupFor('server-b'), isFalse);
+      expect(archiveOnly.isBackupFor('server-1'), isFalse);
+      expect(draft.isBackupFor('server-a'), isFalse);
     });
   });
 
@@ -123,7 +193,7 @@ void main() {
       expect(yaml.contains('nova-craft/runner.sh'), isTrue);
       expect(yaml.contains('nova-craft/config.py'), isTrue);
       expect(yaml.contains('concurrency'), isTrue);
-      expect(yaml.contains('timeout-minutes: 330'), isTrue);
+      expect(yaml.contains('timeout-minutes: 360'), isTrue);
       expect(yaml.contains('restore-keys'), isTrue);
       expect(yaml.contains('actions/cache/restore'), isTrue);
     });
@@ -155,4 +225,27 @@ void main() {
       expect(props.contains('eula') || props.contains('online-mode'), isTrue);
     });
   });
+
+  group('Runner managed JAR status', () {
+    test('only safe plugin/mod paths with Git blob hashes are trusted', () {
+      const String validSha = '0123456789abcdef0123456789abcdef01234567';
+      final ServerRuntime runtime = ServerRuntime.fromJson(<String, dynamic>{
+        'jarSyncStatus': 'synced',
+        'jarSyncAt': '2026-10-19T12:00:00Z',
+        'managedJarShas': <String, String>{
+          'plugins/example.jar': validSha,
+          'mods/nested/example.jar': validSha,
+          'plugins/../escape.jar': validSha,
+          'plugins/bad.jar': 'not-a-git-blob',
+        },
+      });
+      expect(runtime.jarSyncStatus, 'synced');
+      expect(runtime.jarSyncAt, '2026-10-19T12:00:00Z');
+      expect(runtime.managedJarShas, <String, String>{
+        'plugins/example.jar': validSha,
+        'mods/nested/example.jar': validSha,
+      });
+    });
+  });
+
 }

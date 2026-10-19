@@ -5,6 +5,7 @@ import '../core/github_api.dart';
 import '../core/minecraft_api.dart';
 import '../core/models.dart';
 import '../core/modrinth_api.dart';
+import '../core/modrinth_installer.dart';
 import '../core/playit_api.dart';
 import '../core/provisioner.dart';
 import '../core/secure_store.dart';
@@ -17,15 +18,19 @@ class AppState extends ChangeNotifier {
     GitHubApi? api,
     MinecraftApi? minecraft,
     ModrinthApi? modrinth,
+    ModrinthInstaller? installer,
   })  : store = store ?? SecureStore(),
         api = api ?? GitHubApi(),
         minecraft = minecraft ?? MinecraftApi(),
-        modrinth = modrinth ?? ModrinthApi();
+        modrinth = modrinth ?? ModrinthApi() {
+    this.installer = installer ?? ModrinthInstaller(modrinth: this.modrinth, github: this.api);
+  }
 
   final SecureStore store;
   final GitHubApi api;
   final MinecraftApi minecraft;
   final ModrinthApi modrinth;
+  late final ModrinthInstaller installer;
 
   bool booting = true;
   bool sessionReady = false;
@@ -41,6 +46,11 @@ class AppState extends ChangeNotifier {
   bool loadingServers = false;
   String? serversError;
   ServerConfig? selected;
+
+  /// Repository selected before first server creation. Kept only in memory so
+  /// interrupted setup restarts at the repository picker instead of guessing.
+  GhRepo? pendingRepo;
+  bool pendingRepoPlayitSecretReady = false;
 
   bool notifyBackups = true;
   bool notifyFailures = true;
@@ -210,6 +220,23 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
+  void selectPendingRepo(GhRepo? repo) {
+    pendingRepo = repo;
+    pendingRepoPlayitSecretReady = false;
+    notifyListeners();
+  }
+
+  void markPendingRepoPlayitReady() {
+    pendingRepoPlayitSecretReady = true;
+    notifyListeners();
+  }
+
+  void clearPendingRepo() {
+    pendingRepo = null;
+    pendingRepoPlayitSecretReady = false;
+    notifyListeners();
+  }
+
   void upsertServer(ServerConfig config) {
     final List<ServerConfig> next = List<ServerConfig>.from(servers);
     final int index = next.indexWhere((ServerConfig s) => s.repoFull == config.repoFull);
@@ -228,28 +255,32 @@ class AppState extends ChangeNotifier {
   /// First-run gate: the navigation shell only exists once a server is known.
   bool get hasServer => servers.isNotEmpty;
 
-  /// Stores the Playit agent secret encrypted on the device. It is installed
-  /// into a repository secret at creation time or from the network settings.
-  /// Asks Playit about the stored agent key. The key never leaves this call:
-  /// widgets only receive the sanitised [PlayitAgentState].
-  Future<PlayitAgentState> inspectPlayit({bool bedrock = false}) async {
+  /// Asks the official Playit agent API about the stored key. The key never
+  /// enters widget state beyond the secure-store read or appears in a log.
+  Future<PlayitAgentState> inspectPlayit() async {
     final String? secret = await store.playitSecret();
     if (secret == null || secret.isEmpty) {
       return const PlayitAgentState.unknown('missing-secret');
     }
-    return PlayitApi().agentState(secret, bedrock: bedrock);
+    final PlayitApi playit = PlayitApi();
+    try {
+      return await playit.agentState(secret);
+    } finally {
+      playit.dispose();
+    }
   }
 
   Future<void> savePlayitSecret(String secret) async {
     await store.savePlayitSecret(secret);
+    await store.setPlayitSkipped(false);
     playitPrepared = true;
     playitSkipped = false;
     notifyListeners();
   }
 
   Future<void> skipPlayitForNow() async {
-    playitSkipped = true;
     await store.setPlayitSkipped(true);
+    playitSkipped = true;
     notifyListeners();
   }
 
@@ -259,33 +290,44 @@ class AppState extends ChangeNotifier {
     notifyListeners();
   }
 
-  /// Writes the stored secret into the server repository as an Actions secret.
-  /// Returns false when nothing was stored, so callers can ask for it.
-  Future<bool> installPlayitSecret(ServerConfig config, {String? provided}) async {
-    final String? secret = provided ?? await store.playitSecret();
-    if (secret == null || secret.isEmpty) return false;
+  Future<void> _writeSecretWithRefresh(String owner, String repo, String secret) async {
     await ensureTokenFresh();
     try {
-      await Provisioner.writePlayitSecret(api, config, secret);
+      await api.putSecret(owner, repo, 'PLAYIT_SECRET_KEY', secret);
     } on ApiException catch (error) {
       if (error.status != 401) rethrow;
-      // The token expired between refreshes: refresh once and retry.
       final String? refresh = await store.refreshToken();
       if (refresh == null || refresh.isEmpty) rethrow;
       final TokenPoll result = await api.refreshUserToken(AppConfig.githubClientId, refresh);
       if (result.kind != TokenPollKind.success || result.accessToken == null) rethrow;
       await store.saveTokens(result.accessToken!, result.refreshToken ?? refresh, result.expiresIn);
       api.accessToken = result.accessToken;
-      await Provisioner.writePlayitSecret(api, config, secret);
+      await api.putSecret(owner, repo, 'PLAYIT_SECRET_KEY', secret);
     }
+  }
+
+  /// Writes the Playit key to GitHub first and verifies the repository Secret
+  /// name before storing the credential on-device. This ordering prevents a
+  /// "saved" state when the selected runner could not actually receive it.
+  Future<bool> installPlayitSecretForRepo(String owner, String repo, {String? provided}) async {
+    final String? secret = provided ?? await store.playitSecret();
+    if (secret == null || secret.trim().isEmpty) return false;
+    await _writeSecretWithRefresh(owner, repo, secret.trim());
     if (provided != null) {
-      await store.savePlayitSecret(provided);
+      await store.savePlayitSecret(provided.trim());
     } else {
       await store.markPlayitPrepared();
     }
+    await store.setPlayitSkipped(false);
     playitPrepared = true;
+    playitSkipped = false;
     notifyListeners();
     return true;
+  }
+
+  /// Installs the stored key in an already-provisioned server repository.
+  Future<bool> installPlayitSecret(ServerConfig config, {String? provided}) {
+    return installPlayitSecretForRepo(config.repoOwner, config.repoName, provided: provided);
   }
 
   ServerConfig? serverByRepo(String owner, String repo) {
@@ -331,11 +373,17 @@ class AppState extends ChangeNotifier {
       await store.clearLocalData();
     } else {
       await store.clearTokens();
+      await store.clearPlayitSecret();
+      await store.setPlayitSkipped(false);
     }
+    playitPrepared = false;
+    playitSkipped = false;
     api.accessToken = null;
     user = null;
     servers = <ServerConfig>[];
     selected = null;
+    pendingRepo = null;
+    pendingRepoPlayitSecretReady = false;
     sessionExpired = false;
     if (clearLocalData) {
       onboarded = false;

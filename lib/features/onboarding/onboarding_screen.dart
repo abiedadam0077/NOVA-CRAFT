@@ -128,7 +128,9 @@ class _OnboardingScreenState extends State<OnboardingScreen> {
                     const SizedBox(height: 18),
                     NovaButton(
                       label: _page >= 2 ? L10n.t('continueWithGithub') : L10n.t('next'),
-                      trailingIcon: _page >= 2 ? Icons.login_rounded : Icons.arrow_forward_rounded,
+                      trailingIcon: _page >= 2
+                          ? Icons.login_rounded
+                          : (context.isRtl ? Icons.arrow_back_rounded : Icons.arrow_forward_rounded),
                       onPressed: _next,
                     ),
                   ],

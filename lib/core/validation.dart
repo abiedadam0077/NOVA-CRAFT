@@ -5,16 +5,23 @@ class Validation {
   static final RegExp repoNameRegex = RegExp(r'^[A-Za-z0-9._-]{1,100}$');
   static final RegExp _digits = RegExp(r'^[0-9]+$');
 
-  static const List<String> dangerousCommandPrefixes = <String>[
+  static const Set<String> dangerousCommandRoots = <String>{
     'stop',
+    'ban',
     'ban-ip',
+    'pardon',
     'pardon-ip',
-    'op ',
-    'deop ',
-    'whitelist reload',
-    'kick ',
-    'ban ',
-  ];
+    'op',
+    'deop',
+    'whitelist',
+    'kick',
+    'save-off',
+    'save-on',
+    'reload',
+    'function',
+    'execute',
+    'clear',
+  };
 
   static bool validRepoName(String n) => repoNameRegex.hasMatch(n) && n != '.' && n != '..';
 
@@ -30,6 +37,14 @@ class Validation {
     final trimmed = value.trim();
     if (!_digits.hasMatch(trimmed)) return null;
     return int.tryParse(trimmed);
+  }
+
+  /// Playit's official agent daemon validates SECRET_KEY as a non-empty hex
+  /// string. Validate its shape locally; a running Agent is not required to
+  /// store the credential in GitHub Actions Secrets.
+  static bool validPlayitSecret(String value) {
+    final String secret = value.trim();
+    return secret.isNotEmpty && secret.length.isEven && RegExp(r'^[0-9a-fA-F]+$').hasMatch(secret);
   }
 
   /// Rejects traversal and empty segments; returns the cleaned relative path.
@@ -62,32 +77,48 @@ class Validation {
     return idx < 0 ? path : path.substring(idx + 1);
   }
 
+  static bool isSafeConsoleCommand(String command) {
+    final String value = command.trim();
+    if (value.isEmpty || value.length > 512) return false;
+    for (final int codeUnit in value.codeUnits) {
+      if (codeUnit < 0x20 || codeUnit == 0x7f) return false;
+    }
+    return true;
+  }
+
   static bool isDangerousCommand(String cmd) {
     var c = cmd.trim();
     if (c.startsWith('/')) c = c.substring(1);
     c = c.toLowerCase();
-    if (c == 'stop') return true;
-    for (final danger in dangerousCommandPrefixes) {
-      if (c.startsWith(danger)) return true;
-    }
-    return false;
+    if (c.isEmpty) return false;
+    final String root = c.split(RegExp(r'\s+')).first;
+    return dangerousCommandRoots.contains(root);
   }
 
   /// Parses `host:port` (also strips tcp:// / udp:// prefixes).
   static HostPort parseHostPort(String address, int defaultPort) {
-    final a = address
-        .trim()
-        .replaceFirst('tcp://', '')
-        .replaceFirst('udp://', '')
-        .trim();
-    if (a.isEmpty) return HostPort('', defaultPort);
-    final idx = a.lastIndexOf(':');
-    if (idx > 0) {
-      final portPart = a.substring(idx + 1);
-      final port = int.tryParse(portPart);
-      if (port != null) return HostPort(a.substring(0, idx), port);
+    final String value = address.trim().replaceFirst('tcp://', '').replaceFirst('udp://', '').trim();
+    if (value.isEmpty) return HostPort('', defaultPort);
+    if (value.startsWith('[')) {
+      final int close = value.indexOf(']');
+      if (close < 0) return const HostPort('', 0);
+      final String host = value.substring(0, close + 1);
+      final String suffix = value.substring(close + 1);
+      if (suffix.isEmpty) return HostPort(host, defaultPort);
+      if (!suffix.startsWith(':') || suffix.length == 1) return const HostPort('', 0);
+      final int? port = int.tryParse(suffix.substring(1));
+      return port == null ? const HostPort('', 0) : HostPort(host, port);
     }
-    return HostPort(a, defaultPort);
+    final int firstColon = value.indexOf(':');
+    final int lastColon = value.lastIndexOf(':');
+    if (firstColon > 0 && firstColon == lastColon) {
+      final int? port = int.tryParse(value.substring(firstColon + 1));
+      if (port == null) return const HostPort('', 0);
+      return HostPort(value.substring(0, firstColon), port);
+    }
+    // Multiple unbracketed colons are treated as an IPv6 literal with the
+    // edition's default port; a single colon must contain a numeric port.
+    return HostPort(value, defaultPort);
   }
 
   static String sanitizeFileUploadName(String raw) {

@@ -26,6 +26,8 @@ class NetworkView extends StatefulWidget {
     this.active = true,
     this.reportedAddress = '',
     this.runtime,
+    this.activeRun = false,
+    this.showHeader = true,
   });
 
   final ServerConfig config;
@@ -37,34 +39,58 @@ class NetworkView extends StatefulWidget {
 
   /// Latest runner snapshot, used for the real tunnel name/protocol/reasons.
   final ServerRuntime? runtime;
+  final bool activeRun;
+  final bool showHeader;
 
   @override
   State<NetworkView> createState() => _NetworkViewState();
 }
 
 class _NetworkViewState extends State<NetworkView> {
+  late ServerConfig _config;
   final TextEditingController _address = TextEditingController();
   final TextEditingController _secret = TextEditingController();
 
   bool _testing = false;
   bool _saving = false;
+  bool _addressDirty = false;
   bool _linkingPlayit = false;
-  bool _pollingPlayit = false;
   bool _secretPresent = false;
+  bool _localSecretPresent = false;
   bool _checkedSecret = false;
   String? _secretError;
   PingResult? _result;
   DateTime? _testedAt;
   String? _testError;
   bool _checkingPlayit = false;
+  bool _savingTunnel = false;
+  String? _selectedTunnelId;
   PlayitAgentState? _playitState;
   String? _playitError;
 
   @override
   void initState() {
     super.initState();
-    _address.text = widget.config.connectionHostPort.isEmpty ? widget.reportedAddress : widget.config.connectionHostPort;
+    _config = widget.config;
+    _selectedTunnelId = _config.playitTunnelId.isEmpty ? null : _config.playitTunnelId;
+    _address.text = _config.connectionHostPort.isEmpty ? widget.reportedAddress : _config.connectionHostPort;
     WidgetsBinding.instance.addPostFrameCallback((_) => _checkSecret());
+  }
+
+  @override
+  void didUpdateWidget(covariant NetworkView oldWidget) {
+    super.didUpdateWidget(oldWidget);
+    final bool serverChanged = oldWidget.config.repoFull != widget.config.repoFull;
+    final bool configChanged = oldWidget.config.playitAddress != widget.config.playitAddress ||
+        oldWidget.config.playitTunnelId != widget.config.playitTunnelId;
+    if (serverChanged || configChanged) {
+      _config = widget.config;
+      _selectedTunnelId = _config.playitTunnelId.isEmpty ? null : _config.playitTunnelId;
+    }
+    if ((serverChanged || oldWidget.reportedAddress != widget.reportedAddress || oldWidget.config.playitAddress != widget.config.playitAddress) &&
+        !_addressDirty) {
+      _address.text = _config.connectionHostPort.isEmpty ? widget.reportedAddress : _config.connectionHostPort;
+    }
   }
 
   @override
@@ -75,40 +101,33 @@ class _NetworkViewState extends State<NetworkView> {
   }
 
   String get _effectiveAddress {
-    final String configured = widget.config.connectionHostPort;
+    final String configured = _config.connectionHostPort;
     if (configured.isNotEmpty) return configured;
     return widget.reportedAddress.replaceFirst('tcp://', '').replaceFirst('udp://', '').trim();
   }
 
   String get _host => _effectiveAddress.isEmpty
       ? ''
-      : Validation.parseHostPort(_effectiveAddress, widget.config.localPort).host;
-
-  String get _javaAddress {
-    if (_host.isEmpty) return '';
-    final HostPort parsed = Validation.parseHostPort(_effectiveAddress, widget.config.playitJavaPort);
-    return '${parsed.host}:${parsed.port}';
-  }
-
-  String get _bedrockAddress {
-    if (_host.isEmpty) return '';
-    final HostPort parsed = Validation.parseHostPort(_effectiveAddress, widget.config.playitBedrockPort);
-    return '${parsed.host}:${parsed.port}';
-  }
+      : Validation.parseHostPort(_effectiveAddress, _config.localPort).host;
 
   Future<void> _checkSecret() async {
+    final AppState state = AppScope.read(context);
+    bool localPresent = false;
     try {
-      final AppState state = AppScope.read(context);
-      final List<String> names = await state.api.listSecretNames(widget.config.repoOwner, widget.config.repoName);
+      final String? local = await state.store.playitSecret();
+      localPresent = local != null && local.isNotEmpty;
+      final List<String> names = await state.api.listSecretNames(_config.repoOwner, _config.repoName);
       if (!mounted) return;
       setState(() {
         _secretPresent = names.contains('PLAYIT_SECRET_KEY');
+        _localSecretPresent = localPresent;
         _checkedSecret = true;
         _secretError = null;
       });
     } catch (error) {
       if (!mounted) return;
       setState(() {
+        _localSecretPresent = localPresent;
         _checkedSecret = true;
         _secretError = Fmt.error(error);
       });
@@ -116,13 +135,23 @@ class _NetworkViewState extends State<NetworkView> {
   }
 
   Future<void> _saveAddress() async {
+    final String value = _address.text.trim();
+    if (value.isNotEmpty && !Validation.parseHostPort(value, _config.localPort).isValid) {
+      showNovaToast(context, L10n.t('addressInvalid'), kind: ToastKind.warning);
+      return;
+    }
     setState(() => _saving = true);
     try {
       final AppState state = AppScope.read(context);
-      final ServerConfig next = widget.config.copyWith(playitAddress: _address.text.trim());
+      final ServerConfig next = _config.copyWith(playitAddress: _address.text.trim());
       await Provisioner.updateConfig(state.api, next);
       state.upsertServer(next);
       if (!mounted) return;
+      setState(() {
+        _config = next;
+        _addressDirty = false;
+        _address.text = next.connectionHostPort;
+      });
       showNovaToast(context, L10n.t('addressSaved'), kind: ToastKind.success);
     } catch (error) {
       if (!mounted) return;
@@ -142,79 +171,71 @@ class _NetworkViewState extends State<NetworkView> {
     );
     if (!ok || !mounted) return;
     final AppState state = AppScope.read(context);
-    await state.forgetPlayitSecret();
-    _checkSecret();
+    try {
+      await state.api.deleteSecret(_config.repoOwner, _config.repoName, 'PLAYIT_SECRET_KEY');
+      await state.forgetPlayitSecret();
+      if (!mounted) return;
+      setState(() {
+        _secretPresent = false;
+        _localSecretPresent = false;
+        _checkedSecret = true;
+      });
+      showNovaToast(context, L10n.t('playitUnlinked'), kind: ToastKind.success);
+    } catch (error) {
+      if (!mounted) return;
+      showNovaToast(context, Fmt.error(error), kind: ToastKind.error);
+    }
   }
 
   Future<void> _linkPlayit() async {
+    final AppState state = AppScope.read(context);
+    final String? stored = await state.store.playitSecret();
+    if (!mounted) return;
+    final String candidate = _secret.text.trim().isNotEmpty ? _secret.text.trim() : (stored ?? '').trim();
+    if (!Validation.validPlayitSecret(candidate)) {
+      setState(() => _secretError = L10n.t('playitSecretInvalid'));
+      return;
+    }
     setState(() {
       _linkingPlayit = true;
-      _pollingPlayit = true;
       _secretError = null;
     });
     try {
-      final AppState state = AppScope.read(context);
-      final String code = PlayitApi.generateClaimCode();
-      final PlayitApi api = PlayitApi();
-      final String url = await api.claimSetup(code);
+      // Saving a GitHub Secret is deliberately independent from checking the
+      // live Agent. The next server workflow starts the Agent; connectivity is
+      // then reported by status.json and can be checked from this screen.
+      await state.installPlayitSecret(_config, provided: candidate);
       if (!mounted) return;
-      
-      // Open the browser
-      await launchUrl(Uri.parse(url), mode: LaunchMode.externalApplication);
-      
-      // Start polling
-      int attempts = 0;
-      while (_pollingPlayit && mounted && attempts < 60) {
-        await Future<void>.delayed(const Duration(seconds: 3));
-        attempts++;
-        if (!mounted || !_pollingPlayit) break;
-        
-        final String? secret = await api.claimExchange(code);
-        if (secret != null && secret.isNotEmpty) {
-          await state.savePlayitSecret(secret);
-          await Provisioner.writePlayitSecret(state.api, widget.config, secret);
-          if (mounted) {
-            showNovaToast(context, L10n.t('playitLinked'), kind: ToastKind.success);
-            _checkSecret();
-            _checkPlayit();
-          }
-          break;
-        }
-      }
-      api.dispose();
-      
-      if (attempts >= 60 && mounted) {
-        setState(() => _secretError = L10n.t('playitLinkTimeout'));
-      }
-    } catch (error) {
-      if (mounted) {
-        setState(() => _secretError = Fmt.error(error));
-      }
-    } finally {
-      if (mounted) {
-        setState(() {
-        _linkingPlayit = false;
-        _pollingPlayit = false;
+      _secret.clear();
+      setState(() {
+        _secretPresent = true;
+        _localSecretPresent = true;
+        _checkedSecret = true;
       });
-      }
+      showNovaToast(context, L10n.t('playitLinked'), kind: ToastKind.success);
+    } catch (error) {
+      if (mounted) setState(() => _secretError = Fmt.error(error));
+    } finally {
+      if (mounted) setState(() => _linkingPlayit = false);
     }
   }
 
   Future<void> _test() async {
-    if (_host.isEmpty) {
+    final bool bedrock = _config.isBedrock;
+    final HostPort parsed = Validation.parseHostPort(
+      _address.text,
+      bedrock ? _config.playitBedrockPort : _config.playitJavaPort,
+    );
+    if (!parsed.isValid) {
       showNovaToast(context, L10n.t('noAddressConfigured'), kind: ToastKind.warning);
       return;
     }
     setState(() {
       _testing = true;
       _testError = null;
+      _result = null;
     });
     try {
-      final bool bedrock = widget.config.isBedrock;
-      final HostPort parsed = Validation.parseHostPort(
-        widget.config.connectionHostPort,
-        bedrock ? widget.config.playitBedrockPort : widget.config.playitJavaPort,
-      );
       final PingResult result = bedrock
           ? await MinecraftPing.bedrock(host: parsed.host, port: parsed.port)
           : await MinecraftPing.java(host: parsed.host, port: parsed.port);
@@ -241,14 +262,23 @@ class _NetworkViewState extends State<NetworkView> {
     });
     try {
       final AppState state = AppScope.read(context);
-      final PlayitAgentState result = await state.inspectPlayit(bedrock: widget.config.isBedrock);
+      final PlayitAgentState result = await state.inspectPlayit();
       if (!mounted) return;
       setState(() {
         if (result.ok) {
           _playitState = result;
+          final List<PlayitTunnel> matches = result.tunnelsFor(bedrock: _config.isBedrock);
+          final String configuredId = _config.playitTunnelId;
+          if (matches.any((PlayitTunnel tunnel) => tunnel.id == _selectedTunnelId) && _selectedTunnelId != null) {
+            // Keep the user's unsaved selection while refreshing.
+          } else if (matches.any((PlayitTunnel tunnel) => tunnel.id == configuredId) && configuredId.isNotEmpty) {
+            _selectedTunnelId = configuredId;
+          } else {
+            _selectedTunnelId = null;
+          }
         } else {
           _playitState = null;
-          _playitError = result.error == 'missing-secret' ? L10n.t('playitSecretMissing') : result.error;
+          _playitError = Fmt.playitError(result.error);
         }
       });
     } catch (error) {
@@ -259,18 +289,133 @@ class _NetworkViewState extends State<NetworkView> {
     }
   }
 
+  List<PlayitTunnel> get _matchingPlayitTunnels =>
+      _playitState?.tunnelsFor(bedrock: _config.isBedrock) ?? <PlayitTunnel>[];
+
+  List<PlayitTunnel> get _selectablePlayitTunnels =>
+      _matchingPlayitTunnels.where((PlayitTunnel tunnel) => tunnel.id.isNotEmpty).toList();
+
+  Widget _playitTunnelPicker() {
+    final p = context.nova;
+    final List<PlayitTunnel> matches = _matchingPlayitTunnels;
+    final List<PlayitTunnel> selectable = _selectablePlayitTunnels;
+    final bool dirty = (_selectedTunnelId ?? '') != _config.playitTunnelId;
+    if (matches.isEmpty) {
+      final PlayitAgentState? state = _playitState;
+      final String body = state == null
+          ? L10n.t('playitNoMatchingTunnel')
+          : (state.tunnels.isEmpty
+              ? L10n.t('playitNoTunnelsYet')
+              : (state.hasUnsupportedTunnels(bedrock: _config.isBedrock)
+                  ? L10n.t('playitTunnelTypeUnsupported')
+                  : L10n.t('playitNoMatchingTunnel')));
+      return InfoBanner(
+        body: body,
+        icon: Icons.info_outline_rounded,
+        color: p.warning,
+        dense: true,
+      );
+    }
+    if (selectable.length > 1) {
+      return Column(
+        crossAxisAlignment: CrossAxisAlignment.stretch,
+        children: <Widget>[
+          NovaDropdown<String>(
+            label: L10n.t('selectPlayitTunnel'),
+            value: _selectedTunnelId,
+            items: selectable.map((PlayitTunnel tunnel) {
+              final String title = tunnel.name.isEmpty ? tunnel.id : tunnel.name;
+              final String address = tunnel.address.isEmpty ? L10n.t('playitAwaitingAddress') : tunnel.address;
+              return DropdownMenuItem<String>(
+                value: tunnel.id,
+                child: Text('$title · $address', maxLines: 1, overflow: TextOverflow.ellipsis),
+              );
+            }).toList(),
+            onChanged: (String? value) => setState(() => _selectedTunnelId = value),
+          ),
+          if (dirty) ...<Widget>[
+            const SizedBox(height: 8),
+            NovaButton(
+              label: L10n.t('saveChanges'),
+              icon: Icons.save_rounded,
+              size: NovaButtonSize.compact,
+              loading: _savingTunnel,
+              onPressed: _savingTunnel ? null : _saveTunnelSelection,
+            ),
+          ],
+        ],
+      );
+    }
+    if (matches.length > 1 && selectable.length < matches.length) {
+      return InfoBanner(
+        body: L10n.t('playitTunnelIdMissing'),
+        icon: Icons.warning_amber_rounded,
+        color: p.warning,
+        dense: true,
+      );
+    }
+    final PlayitTunnel only = matches.single;
+    if (only.id.isEmpty) {
+      return InfoBanner(
+        body: L10n.t('playitTunnelIdMissing'),
+        icon: Icons.warning_amber_rounded,
+        color: p.warning,
+        dense: true,
+      );
+    }
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
+      children: <Widget>[
+        InfoRow(
+          label: L10n.t('selectedPlayitTunnel'),
+          value: only.address.isEmpty ? only.name : only.address,
+          monospace: only.address.isNotEmpty,
+        ),
+        if (dirty) ...<Widget>[
+          const SizedBox(height: 8),
+          NovaButton(
+            label: L10n.t('saveChanges'),
+            icon: Icons.save_rounded,
+            size: NovaButtonSize.compact,
+            loading: _savingTunnel,
+            onPressed: _savingTunnel ? null : _saveTunnelSelection,
+          ),
+        ],
+      ],
+    );
+  }
+
+  Future<void> _saveTunnelSelection() async {
+    if (_savingTunnel) return;
+    setState(() => _savingTunnel = true);
+    try {
+      final AppState state = AppScope.read(context);
+      final ServerConfig next = _config.copyWith(playitTunnelId: _selectedTunnelId ?? '');
+      await Provisioner.updateConfig(state.api, next);
+      state.upsertServer(next);
+      if (!mounted) return;
+      setState(() => _config = next);
+      showNovaToast(context, L10n.t('playitTunnelSavedNextCycle'), kind: ToastKind.success);
+    } catch (error) {
+      if (!mounted) return;
+      showNovaToast(context, Fmt.error(error), kind: ToastKind.error);
+    } finally {
+      if (mounted) setState(() => _savingTunnel = false);
+    }
+  }
+
   Future<void> _reconnect() async {
     final bool ok = await showNovaConfirm(
       context,
-      title: L10n.t('reconnect'),
-      body: L10n.t('restartConfirmBody'),
-      confirmLabel: L10n.t('reconnect'),
+      title: L10n.t(widget.activeRun ? 'reconnect' : 'playitStartServerAgent'),
+      body: L10n.t(widget.activeRun ? 'restartConfirmBody' : 'playitStartServerConfirm'),
+      confirmLabel: L10n.t(widget.activeRun ? 'reconnect' : 'playitStartServerAgent'),
       icon: Icons.sync_rounded,
     );
     if (!ok || !mounted) return;
     try {
       final AppState state = AppScope.read(context);
-      await Provisioner.restartServer(state.api, widget.config, activeRun: false);
+      await Provisioner.restartServer(state.api, _config, activeRun: widget.activeRun);
       if (!mounted) return;
       showNovaToast(context, L10n.t('actionQueued'), kind: ToastKind.success);
     } catch (error) {
@@ -279,14 +424,120 @@ class _NetworkViewState extends State<NetworkView> {
     }
   }
 
+  String _agentStatusLabel(ServerRuntime runtime) {
+    switch (runtime.agentStatus) {
+      case 'not_started':
+        return L10n.t('playitAgentNotStarted');
+      case 'starting':
+        return L10n.t('playitAgentStarting');
+      case 'connected':
+        return runtime.phase == 'stopped' ? L10n.t('playitAgentStopped') : L10n.t('playitAgentConnected');
+      case 'failed':
+        return L10n.t('playitAgentFailed');
+      case 'stopped':
+        return L10n.t('playitAgentStopped');
+      default:
+        return L10n.t('unknown');
+    }
+  }
+
+  String _tunnelStatusLabel(ServerRuntime runtime) {
+    switch (runtime.tunnelStatus) {
+      case 'connected':
+        return runtime.online ? L10n.t('playitConnectionReady') : L10n.t('tunnelUnknown');
+      case 'allocated':
+      case 'connecting':
+        return L10n.t('playitTunnelConnecting');
+      case 'missing':
+      case 'not_created':
+        return L10n.t('playitTunnelNotCreated');
+      case 'unsupported':
+        return L10n.t('playitTunnelTypeUnsupported');
+      case 'address_unavailable':
+        return L10n.t('playitTunnelAddressUnavailable');
+      case 'server_port_not_listening':
+        return L10n.t('playitServerPortNotListening');
+      case 'origin_mismatch':
+        return L10n.t('playitTunnelOriginMismatch');
+      case 'selection_required':
+        return L10n.t('playitTunnelSelectionRequired');
+      case 'disabled':
+        return L10n.t('tunnelInactive');
+      case 'error':
+        return L10n.t('playitTunnelError');
+      default:
+        return L10n.t('tunnelUnknown');
+    }
+  }
+
+  String? _agentDiagnosticLabel(ServerRuntime runtime) {
+    switch (runtime.agentDiagnostic) {
+      case 'invalid_secret':
+        return L10n.t('playitAgentBadSecret');
+      case 'invalid_secret_format':
+        return L10n.t('playitAgentBadSecretFormat');
+      case 'network_unreachable':
+        return L10n.t('playitAgentNetworkFailure');
+      case 'account_agent_limit':
+        return L10n.t('playitAgentAccountLimit');
+      case 'agent_download_failed':
+      case 'agent_checksum_failed':
+        return L10n.t('playitAgentDownloadFailure');
+      case 'secure_temp_directory_failed':
+      case 'temp_directory_unavailable':
+      case 'write_secret_failed':
+      case 'write_api_config_failed':
+      case 'create_log_failed':
+      case 'secure_temp_files_failed':
+        return L10n.t('playitAgentTempFileFailure');
+      case 'process_exited':
+        return L10n.t('playitAgentProcessExited');
+      case 'ipc_socket_failed':
+        return L10n.t('playitAgentIpcSocketFailure');
+      case 'startup_timeout':
+        return L10n.t('playitAgentStillStarting');
+      case 'secret_missing':
+        return L10n.t('playitAgentNotStarted');
+      case 'waiting_for_minecraft':
+      case 'minecraft_port_not_listening':
+        return L10n.t('playitAgentWaitingForMinecraft');
+      default:
+        return null;
+    }
+  }
+
+  String? _tunnelDiagnosticLabel(ServerRuntime runtime) {
+    switch (runtime.tunnelDiagnostic) {
+      case 'rundata_network_error':
+        return L10n.t('playitRundataNetworkError');
+      case 'rundata_unauthorized':
+        return L10n.t('playitRundataUnauthorized');
+      case 'rundata_forbidden':
+        return L10n.t('playitRundataForbidden');
+      case 'rundata_http_error':
+        return L10n.t('playitRundataHttpError');
+      case 'rundata_empty':
+        return L10n.t('playitRundataEmpty');
+      case 'rundata_parse_error':
+        return L10n.t('playitRundataMalformed');
+      default:
+        return null;
+    }
+  }
+
   @override
   Widget build(BuildContext context) {
     final p = context.nova;
     final bool configured = _host.isNotEmpty;
-    final bool online = _result?.online ?? false;
+    final String displayAddress = _effectiveAddress;
+    final String addressLabel = L10n.t(_config.isBedrock ? 'bedrockAddress' : 'javaAddress');
+    final bool runnerReady = widget.runtime?.tunnelConnected == true && widget.runtime!.online;
+    final bool online = _result?.online ?? runnerReady;
     final String stateLabel = !configured
         ? L10n.t('tunnelUnknown')
-        : (online ? L10n.t('tunnelActive') : (_result == null ? L10n.t('tunnelUnknown') : L10n.t('tunnelInactive')));
+        : (online
+            ? L10n.t('tunnelActive')
+            : (_result == null && widget.runtime == null ? L10n.t('tunnelUnknown') : L10n.t('tunnelInactive')));
     final Color stateColor = !configured
         ? p.textMuted
         : (online ? p.success : (_result == null ? p.textMuted : p.danger));
@@ -295,53 +546,54 @@ class _NetworkViewState extends State<NetworkView> {
       padding: const EdgeInsets.only(bottom: 24),
       physics: const BouncingScrollPhysics(),
       children: <Widget>[
-        ClipRRect(
-          borderRadius: NovaRadii.rXl,
-          child: SizedBox(
-            height: 148,
-            child: Stack(
-              fit: StackFit.expand,
-              children: <Widget>[
-                Image.asset('assets/images/art_network.jpg', fit: BoxFit.cover),
-                const DecoratedBox(decoration: BoxDecoration(gradient: NovaGradients.heroScrim)),
-                PositionedDirectional(
-                  start: 16,
-                  bottom: 14,
-                  end: 16,
-                  child: Row(
-                    children: <Widget>[
-                      Expanded(
-                        child: Column(
-                          crossAxisAlignment: CrossAxisAlignment.start,
-                          children: <Widget>[
-                            Text(L10n.t('networkTitle'), style: NovaTextStyles.display(21, Colors.white)),
-                            const SizedBox(height: 2),
-                            Text(
-                              L10n.t('networkSubtitle'),
-                              maxLines: 1,
-                              overflow: TextOverflow.ellipsis,
-                              style: NovaTextStyles.small(const Color(0xFFB9C7E8)),
-                            ),
-                          ],
+        if (widget.showHeader)
+          ClipRRect(
+            borderRadius: NovaRadii.rXl,
+            child: SizedBox(
+              height: 148,
+              child: Stack(
+                fit: StackFit.expand,
+                children: <Widget>[
+                  Image.asset('assets/images/art_network.jpg', fit: BoxFit.cover),
+                  const DecoratedBox(decoration: BoxDecoration(gradient: NovaGradients.heroScrim)),
+                  PositionedDirectional(
+                    start: 16,
+                    bottom: 14,
+                    end: 16,
+                    child: Row(
+                      children: <Widget>[
+                        Expanded(
+                          child: Column(
+                            crossAxisAlignment: CrossAxisAlignment.start,
+                            children: <Widget>[
+                              Text(L10n.t('networkTitle'), style: NovaTextStyles.display(21, Colors.white)),
+                              const SizedBox(height: 2),
+                              Text(
+                                L10n.t('networkSubtitle'),
+                                maxLines: 1,
+                                overflow: TextOverflow.ellipsis,
+                                style: NovaTextStyles.small(const Color(0xFFB9C7E8)),
+                              ),
+                            ],
+                          ),
                         ),
-                      ),
-                      Pill(
-                        label: stateLabel,
-                        tone: !configured
-                            ? PillTone.neutral
-                            : (online ? PillTone.success : (_result == null ? PillTone.neutral : PillTone.danger)),
-                        dense: true,
-                      ),
-                    ],
+                        Pill(
+                          label: stateLabel,
+                          tone: !configured
+                              ? PillTone.neutral
+                              : (online ? PillTone.success : (_result == null ? PillTone.neutral : PillTone.danger)),
+                          dense: true,
+                        ),
+                      ],
+                    ),
                   ),
-                ),
-              ],
+                ],
+              ),
             ),
           ),
-        ),
-        const SizedBox(height: 14),
+        SizedBox(height: widget.showHeader ? 14 : 4),
         SectionCard(
-          title: L10n.t('serverAddresses'),
+          title: L10n.t('connectionAddress'),
           icon: Icons.lan_rounded,
           actionLabel: _testing ? L10n.t('testing') : L10n.t('testConnection'),
           onAction: _testing ? null : _test,
@@ -349,25 +601,13 @@ class _NetworkViewState extends State<NetworkView> {
             crossAxisAlignment: CrossAxisAlignment.stretch,
             children: <Widget>[
               AddressPill(
-                address: _javaAddress.isEmpty ? L10n.t('noAddressYet') : _javaAddress,
-                label: L10n.t('javaAddress'),
+                address: displayAddress.isEmpty ? L10n.t('noAddressYet') : displayAddress,
+                label: addressLabel,
                 compact: true,
-                onCopy: _javaAddress.isEmpty
+                onCopy: displayAddress.isEmpty
                     ? null
                     : () {
-                        Clipboard.setData(ClipboardData(text: _javaAddress));
-                        showNovaToast(context, L10n.t('copied'), kind: ToastKind.success);
-                      },
-              ),
-              const SizedBox(height: 8),
-              AddressPill(
-                address: _bedrockAddress.isEmpty ? L10n.t('noAddressYet') : _bedrockAddress,
-                label: L10n.t('bedrockAddress'),
-                compact: true,
-                onCopy: _bedrockAddress.isEmpty
-                    ? null
-                    : () {
-                        Clipboard.setData(ClipboardData(text: _bedrockAddress));
+                        Clipboard.setData(ClipboardData(text: displayAddress));
                         showNovaToast(context, L10n.t('copied'), kind: ToastKind.success);
                       },
               ),
@@ -438,8 +678,19 @@ class _NetworkViewState extends State<NetworkView> {
                 controller: _address,
                 hint: 'your-tunnel.playit.gg',
                 prefixIcon: Icons.hub_rounded,
-                helper: L10n.t('addressFromConfig'),
-                onChanged: (_) => setState(() {}),
+                helper: _addressDirty
+                    ? L10n.t('addressManualHint')
+                    : (_config.connectionHostPort.isNotEmpty
+                        ? L10n.t('addressFromConfig')
+                        : (widget.reportedAddress.isNotEmpty
+                            ? L10n.t('addressReportedByPlayit')
+                            : L10n.t('addressManualHint'))),
+                onChanged: (_) => setState(() {
+                  _addressDirty = true;
+                  _result = null;
+                  _testedAt = null;
+                  _testError = null;
+                }),
               ),
               const SizedBox(height: 10),
               NovaButton(
@@ -471,28 +722,26 @@ class _NetworkViewState extends State<NetworkView> {
                 InlineError(message: _secretError!, onRetry: _checkSecret),
               ],
               const SizedBox(height: 10),
-              if (!_secretPresent) ...[
+              if (!_secretPresent || !_localSecretPresent) ...[
+                const SizedBox(height: 10),
+                NovaField(
+                  label: L10n.t('playitKeyLabel'),
+                  controller: _secret,
+                  hint: 'SECRET_KEY',
+                  obscure: true,
+                  prefixIcon: Icons.key_rounded,
+                  helper: _localSecretPresent ? L10n.t('playitStoredUse') : L10n.t('playitLinkInstructions'),
+                  errorText: _secretError,
+                ),
                 const SizedBox(height: 10),
                 NovaButton(
-                  label: _linkingPlayit ? L10n.t('waitingForBrowser') : L10n.t('connectPlayit'),
-                  icon: Icons.link_rounded,
+                  label: _linkingPlayit ? L10n.t('loading') : L10n.t('saveAsSecret'),
+                  icon: Icons.lock_rounded,
                   loading: _linkingPlayit,
                   onPressed: _linkingPlayit ? null : _linkPlayit,
                 ),
                 const SizedBox(height: 10),
-                Row(
-                  crossAxisAlignment: CrossAxisAlignment.start,
-                  children: [
-                    Icon(Icons.info_outline_rounded, size: 16, color: p.textMuted),
-                    const SizedBox(width: 6),
-                    Expanded(
-                      child: Text(
-                        L10n.t('playitLinkInstructions'),
-                        style: NovaTextStyles.caption(p.textMuted),
-                      ),
-                    ),
-                  ],
-                ),
+                Text(L10n.t('playitLinkInstructions'), style: NovaTextStyles.caption(p.textMuted)),
               ],
               if (_secretPresent) ...[
                 const SizedBox(height: 10),
@@ -540,8 +789,8 @@ class _NetworkViewState extends State<NetworkView> {
                   const SizedBox(width: 8),
                   Expanded(child: Text(stateLabel, style: NovaTextStyles.bodyStrong(stateColor))),
                   NovaButton(
-                    label: L10n.t('reconnect'),
-                    icon: Icons.sync_rounded,
+                    label: L10n.t(widget.activeRun ? 'reconnect' : 'playitStartServerAgent'),
+                    icon: widget.activeRun ? Icons.sync_rounded : Icons.play_arrow_rounded,
                     size: NovaButtonSize.compact,
                     expand: false,
                     variant: NovaButtonVariant.secondary,
@@ -552,17 +801,79 @@ class _NetworkViewState extends State<NetworkView> {
               if (widget.runtime != null) ...<Widget>[
                 const SizedBox(height: 10),
                 InfoRow(
-                  label: L10n.t('runnerTunnelState'),
-                  value: widget.runtime!.tunnelStatus.isEmpty ? L10n.t('unknown') : widget.runtime!.tunnelStatus,
-                  valueColor: widget.runtime!.tunnelConnected ? p.successBright : p.textMuted,
-                  monospace: true,
+                  label: L10n.t('playitSecretStatus'),
+                  value: widget.runtime!.playitSecretStatus == 'saved'
+                      ? L10n.t('playitSecretSaved')
+                      : (widget.runtime!.playitSecretStatus == 'missing'
+                          ? L10n.t('playitSecretMissingFromRun')
+                          : L10n.t('unknown')),
+                  valueColor: widget.runtime!.playitSecretStatus == 'saved' ? p.successBright : p.warning,
                 ),
+                InfoRow(
+                  label: L10n.t('playitAgentStatus'),
+                  value: _agentStatusLabel(widget.runtime!),
+                  valueColor: widget.runtime!.agentStatus == 'connected'
+                      ? p.successBright
+                      : (widget.runtime!.agentStatus == 'failed' ? p.danger : p.warning),
+                ),
+                InfoRow(
+                  label: L10n.t('playitTunnelStatus'),
+                  value: _tunnelStatusLabel(widget.runtime!),
+                  valueColor: widget.runtime!.tunnelConnected && widget.runtime!.online
+                      ? p.successBright
+                      : (widget.runtime!.tunnelStatus == 'error' || widget.runtime!.tunnelStatus == 'unsupported'
+                          ? p.danger
+                          : p.warning),
+                ),
+                InfoRow(
+                  label: L10n.t('playitServerPortStatus'),
+                  value: widget.runtime!.serverPortStatus == 'listening'
+                      ? L10n.t('playitServerPortListening')
+                      : (widget.runtime!.serverPortStatus == 'not_listening'
+                          ? L10n.t('playitServerPortNotListening')
+                          : L10n.t('unknown')),
+                  valueColor: widget.runtime!.serverPortStatus == 'listening' ? p.successBright : p.warning,
+                ),
+                if (widget.runtime!.gamePort != null)
+                  InfoRow(label: L10n.t('playitGamePort'), value: '${widget.runtime!.gamePort}', monospace: true),
+                if (int.tryParse(widget.runtime!.agentExitCode) != null)
+                  InfoRow(label: L10n.t('playitAgentExitCode'), value: widget.runtime!.agentExitCode, monospace: true),
+                if (widget.runtime!.tunnelDiagnostic.isNotEmpty)
+                  InfoRow(label: L10n.t('playitDiagnosticCode'), value: widget.runtime!.tunnelDiagnostic, monospace: true),
+                if (_tunnelDiagnosticLabel(widget.runtime!) != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(_tunnelDiagnosticLabel(widget.runtime!)!, style: NovaTextStyles.caption(p.warning)),
+                  ),
                 if (widget.runtime!.tunnelName.isNotEmpty)
                   InfoRow(label: L10n.t('playitTunnelName'), value: widget.runtime!.tunnelName),
                 if (widget.runtime!.tunnelProtocol.isNotEmpty)
                   InfoRow(label: L10n.t('playitTunnelProtocol'), value: widget.runtime!.tunnelProtocol, monospace: true),
                 if (widget.runtime!.agentId.isNotEmpty)
                   InfoRow(label: L10n.t('playitAgentId'), value: widget.runtime!.agentId, monospace: true),
+                if (widget.runtime!.tunnelLocalIp.isNotEmpty || widget.runtime!.tunnelLocalPort != null)
+                  InfoRow(
+                    label: L10n.t('playitTunnelLocalOrigin'),
+                    value: '${widget.runtime!.tunnelLocalIp}${widget.runtime!.tunnelLocalPort == null ? '' : ':${widget.runtime!.tunnelLocalPort}'}',
+                    monospace: true,
+                  ),
+                if (_agentDiagnosticLabel(widget.runtime!) != null)
+                  Padding(
+                    padding: const EdgeInsets.only(top: 6),
+                    child: Text(_agentDiagnosticLabel(widget.runtime!)!, style: NovaTextStyles.caption(p.warning)),
+                  ),
+                if (widget.runtime!.tunnelMessage.trim().isNotEmpty &&
+                    <String>{'error', 'not_created', 'unsupported', 'address_unavailable', 'server_port_not_listening', 'origin_mismatch', 'selection_required'}
+                        .contains(widget.runtime!.tunnelStatus))
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: InfoBanner(
+                      body: L10n.f('playitTunnelDetails', <String, String>{'detail': widget.runtime!.tunnelMessage}),
+                      icon: Icons.info_outline_rounded,
+                      color: widget.runtime!.tunnelStatus == 'error' ? p.danger : p.warning,
+                      dense: true,
+                    ),
+                  ),
                 for (final String reason in widget.runtime!.tunnelOfflineReasons)
                   Padding(
                     padding: const EdgeInsets.only(top: 4),
@@ -571,6 +882,52 @@ class _NetworkViewState extends State<NetworkView> {
                       style: NovaTextStyles.caption(p.warning),
                     ),
                   ),
+                if (_secretPresent && widget.runtime!.agentStatus == 'starting')
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: InfoBanner(
+                      body: L10n.t('playitAgentStillStarting'),
+                      icon: Icons.info_outline_rounded,
+                      color: p.warning,
+                      dense: true,
+                    ),
+                  )
+                else if (_secretPresent &&
+                    widget.runtime!.agentStatus != 'connected' && widget.runtime!.agentStatus != 'failed')
+                  Padding(
+                    padding: const EdgeInsets.only(top: 8),
+                    child: InfoBanner(
+                      body: L10n.t('playitStartServerAgentHint'),
+                      icon: Icons.info_outline_rounded,
+                      color: p.warning,
+                      dense: true,
+                    ),
+                  ),
+                if (widget.runtime!.agentLogTail.trim().isNotEmpty)
+                  ExpansionTile(
+                    tilePadding: EdgeInsets.zero,
+                    childrenPadding: EdgeInsets.zero,
+                    title: Text(L10n.t('playitAgentLogTitle'), style: NovaTextStyles.caption(p.textDim)),
+                    children: <Widget>[
+                      ConstrainedBox(
+                        constraints: const BoxConstraints(maxHeight: 200),
+                        child: SingleChildScrollView(
+                          child: SelectableText(
+                            widget.runtime!.agentLogTail,
+                            style: NovaTextStyles.mono(11, p.textDim),
+                          ),
+                        ),
+                      ),
+                    ],
+                  ),
+              ] else if (_secretPresent) ...<Widget>[
+                const SizedBox(height: 8),
+                InfoBanner(
+                  body: L10n.t('playitStartServerAgentHint'),
+                  icon: Icons.info_outline_rounded,
+                  color: p.warning,
+                  dense: true,
+                ),
               ],
               if (_playitError != null) ...<Widget>[
                 const SizedBox(height: 8),
@@ -597,8 +954,8 @@ class _NetworkViewState extends State<NetworkView> {
                             monospace: t.hasAddress,
                             valueColor: t.hasAddress && t.enabled ? p.successBright : p.textMuted,
                           )),
-                      if (_playitState!.tunnels.isEmpty)
-                        Text(L10n.t('playitNoTunnelsYet'), style: NovaTextStyles.small(p.textMuted)),
+                      const SizedBox(height: 8),
+                      _playitTunnelPicker(),
                     ],
                   ),
                 ),

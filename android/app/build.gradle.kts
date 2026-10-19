@@ -41,15 +41,14 @@ android {
         applicationId = "io.github.abiedadam0077.novacraft"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
+        versionCode = 2
         versionName = "1.0.0"
     }
 
     signingConfigs {
-        // Keep a JAR (v1) signature alongside v2/v3. Modern Android only needs
-        // v2, but v1 is what many sideload/inspection tools verify; AGP omits it
-        // by default when minSdk >= 24, which made third-party tools report the
-        // APK as unsigned even though Android accepted it.
+        // Request the legacy JAR (v1) signature alongside v2/v3. Some AGP
+        // release outputs still omit v1 for minSdk >= 24, so CI re-signs and
+        // verifies the final distributable APK with apksigner as a second guard.
         getByName("debug") {
             enableV1Signing = true
             enableV2Signing = true

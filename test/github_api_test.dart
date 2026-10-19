@@ -1,9 +1,12 @@
+import 'dart:async';
 import 'dart:convert';
 import 'package:flutter_test/flutter_test.dart';
 import 'package:http/http.dart' as http;
 import 'package:http/testing.dart';
 import 'package:nova_craft/core/github_api.dart';
 import 'package:nova_craft/core/models.dart';
+import 'package:nova_craft/core/provisioner.dart';
+import 'package:nova_craft/core/workflow_templates.dart';
 import 'package:pinenacl/x25519.dart';
 
 /// These tests exercise the real request/response contract against a fake
@@ -79,6 +82,86 @@ void main() {
       expect(post.method, 'POST');
       expect(jsonDecode(post.body)['ref'], 'master');
     });
+
+    test('repository listing follows every API page', () async {
+      final List<http.Request> seen = <http.Request>[];
+      Map<String, dynamic> repo(int id) => <String, dynamic>{
+            'id': id,
+            'name': 'repo-$id',
+            'owner': <String, String>{'login': 'owner'},
+            'private': true,
+            'default_branch': 'main',
+            'permissions': <String, bool>{'push': true},
+          };
+      final http.Client client = MockClient((http.Request request) async {
+        seen.add(request);
+        final List<Map<String, dynamic>> page = request.url.queryParameters['page'] == '1'
+            ? List<Map<String, dynamic>>.generate(100, (int index) => repo(index))
+            : <Map<String, dynamic>>[repo(100)];
+        return http.Response(jsonEncode(page), 200);
+      });
+      final GitHubApi api = GitHubApi(client: client);
+      final List<GhRepo> repos = await api.listUserRepos();
+      expect(repos, hasLength(101));
+      expect(seen.map((http.Request r) => r.url.queryParameters['page']), <String?>['1', '2']);
+      expect(seen.every((http.Request r) => r.url.queryParameters['per_page'] == '100'), isTrue);
+    });
+  });
+
+  group('Workflow run diagnostics', () {
+    test('listRuns checks only the requested NOVA workflow and parses its status', () async {
+      final List<http.Request> seen = <http.Request>[];
+      final http.Client client = MockClient((http.Request request) async {
+        seen.add(request);
+        return http.Response(jsonEncode(<String, dynamic>{
+          'workflow_runs': <Map<String, dynamic>>[
+            <String, dynamic>{
+              'id': 42,
+              'name': 'NOVA CRAFT Server',
+              'status': 'in_progress',
+              'conclusion': null,
+              'created_at': '2026-10-18T12:00:00Z',
+              'updated_at': '2026-10-18T12:01:00Z',
+              'html_url': 'https://github.com/owner/repo/actions/runs/42',
+              'event': 'workflow_dispatch',
+              'run_started_at': '2026-10-18T12:00:01Z',
+              'head_sha': 'abc123',
+            },
+          ],
+        }), 200);
+      });
+      final GitHubApi api = GitHubApi(client: client);
+      final List<WorkflowRun> runs = await api.listRuns('owner', 'repo', workflow: Provisioner.workflowFile);
+      expect(runs, hasLength(1));
+      expect(runs.single.id, 42);
+      expect(runs.single.isActive, isTrue);
+      expect(seen.single.url.path, contains('/actions/workflows/novacraft-server.yml/runs'));
+    });
+
+    test('a non-map workflow run is rejected as malformed data', () async {
+      final GitHubApi api = GitHubApi(
+        client: MockClient((http.Request request) async => http.Response('{"workflow_runs":[null]}', 200)),
+      );
+      await expectLater(api.listRuns('owner', 'repo', workflow: Provisioner.workflowFile), throwsA(isA<ApiException>()));
+    });
+
+    test('GitHub requests use the injected timeout instead of waiting for the 40-second default', () async {
+      final GitHubApi api = GitHubApi(
+        client: MockClient((http.Request request) => Completer<http.Response>().future),
+        timeout: const Duration(milliseconds: 1),
+      );
+      await expectLater(
+        api.getFileText('owner', 'repo', 'nova-craft/files/manifest.json'),
+        throwsA(isA<TimeoutException>()),
+      );
+    });
+
+    test('a malformed run-list response is an API error, not an empty workflow history', () async {
+      final GitHubApi api = GitHubApi(
+        client: MockClient((http.Request request) async => http.Response('{"message":"unexpected"}', 200)),
+      );
+      await expectLater(api.listRuns('owner', 'repo', workflow: Provisioner.workflowFile), throwsA(isA<ApiException>()));
+    });
   });
 
   group('Repository secrets', () {
@@ -142,6 +225,70 @@ void main() {
         throwsA(isA<ApiException>()),
       );
       expect(seen, isEmpty);
+    });
+  });
+
+  group('Backup restore safety', () {
+    test('a release from another server is rejected before dispatch', () {
+      final List<http.Request> seen = <http.Request>[];
+      final GitHubApi api = GitHubApi(
+        client: MockClient((http.Request request) async {
+          seen.add(request);
+          return http.Response('{}', 204);
+        }),
+      );
+      const ServerConfig config = ServerConfig(
+        id: 'server-a',
+        name: 'Server A',
+        repoOwner: 'owner',
+        repoName: 'repo',
+      );
+      expect(
+        () => Provisioner.restoreBackup(api, config, 'backup-server-b-20261018T120000000000Z'),
+        throwsA(isA<ApiException>()),
+      );
+      expect(seen, isEmpty);
+    });
+  });
+
+  group('Existing server runner upgrades', () {
+    test('updates only generated workflow helpers, not world data, properties, config or secrets', () async {
+      final List<http.Request> seen = <http.Request>[];
+      final http.Client client = MockClient((http.Request request) async {
+        seen.add(request);
+        if (request.method == 'GET' && request.url.path.contains('/contents/')) {
+          return http.Response('{"message":"Not Found"}', 404);
+        }
+        if (request.method == 'PUT' && request.url.path.contains('/contents/')) return http.Response('{}', 201);
+        return http.Response('{"message":"Not Found"}', 404);
+      });
+      final GitHubApi api = GitHubApi(client: client);
+      const ServerConfig config = ServerConfig(
+        id: 'server-a',
+        name: 'Server A',
+        repoOwner: 'owner',
+        repoName: 'repo',
+        defaultBranch: 'main',
+      );
+      await Provisioner.updateRunnerFiles(api, config);
+      final List<http.Request> updates = seen.where((http.Request request) => request.method == 'PUT').toList();
+      final Set<String> paths = updates.map((http.Request request) => request.url.path).toSet();
+      expect(paths, containsAll(<String>[
+        '/repos/owner/repo/contents/nova-craft/config.py',
+        '/repos/owner/repo/contents/nova-craft/fileops.py',
+        '/repos/owner/repo/contents/nova-craft/playit.py',
+        '/repos/owner/repo/contents/nova-craft/runner.sh',
+        '/repos/owner/repo/contents/.github/workflows/novacraft-server.yml',
+        '/repos/owner/repo/contents/nova-craft/commands/.gitkeep',
+      ]));
+      expect(paths, isNot(contains('/repos/owner/repo/contents/nova-craft/server.json')));
+      expect(paths, isNot(contains('/repos/owner/repo/contents/server_data/server.properties')));
+      expect(updates.every((http.Request request) => jsonDecode(request.body)['branch'] == 'main'), isTrue);
+      final http.Request runner = updates.firstWhere((http.Request request) => request.url.path.endsWith('/nova-craft/runner.sh'));
+      expect(utf8.decode(base64Decode(jsonDecode(runner.body)['content'] as String)), WorkflowTemplates.runnerScript);
+      final http.Request fileops = updates.firstWhere((http.Request request) => request.url.path.endsWith('/nova-craft/fileops.py'));
+      expect(utf8.decode(base64Decode(jsonDecode(fileops.body)['content'] as String)), WorkflowTemplates.fileOpsScript);
+      expect(updates.length, 6);
     });
   });
 

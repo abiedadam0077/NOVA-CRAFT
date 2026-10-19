@@ -111,6 +111,11 @@ class _ConsoleViewState extends State<ConsoleView> {
   Future<void> _send() async {
     final String text = _command.text.trim();
     if (text.isEmpty || _sending) return;
+    if (!widget.config.allowCommands) {
+      showNovaToast(context, L10n.t('commandsDisabled'), kind: ToastKind.warning);
+      return;
+    }
+    bool confirmedDangerous = false;
     if (Validation.isDangerousCommand(text)) {
       final bool ok = await showNovaConfirm(
         context,
@@ -121,11 +126,12 @@ class _ConsoleViewState extends State<ConsoleView> {
         icon: Icons.warning_amber_rounded,
       );
       if (!ok || !mounted) return;
+      confirmedDangerous = true;
     }
     setState(() => _sending = true);
     try {
       final AppState state = AppScope.read(context);
-      await Provisioner.sendCommand(state.api, widget.config, text);
+      await Provisioner.sendCommand(state.api, widget.config, text, confirmedDangerous: confirmedDangerous);
       if (!mounted) return;
       _command.clear();
       HapticFeedback.selectionClick();
@@ -295,7 +301,9 @@ class _ConsoleViewState extends State<ConsoleView> {
             hint: L10n.t('consoleCommandHint'),
             prefixIcon: Icons.chevron_right_rounded,
             monospace: true,
-            onSubmitted: (_) => _send(),
+            enabled: widget.config.allowCommands,
+            helper: widget.config.allowCommands ? null : L10n.t('commandsDisabled'),
+            onSubmitted: widget.config.allowCommands ? (_) => _send() : null,
           ),
         ),
         const SizedBox(width: 8),
@@ -307,7 +315,7 @@ class _ConsoleViewState extends State<ConsoleView> {
             size: 52,
             iconSize: 21,
             filled: true,
-            onTap: _sending ? null : _send,
+            onTap: _sending || !widget.config.allowCommands ? null : _send,
             tooltip: L10n.t('consoleSend'),
           ),
         ),
@@ -385,7 +393,7 @@ class _ConsoleViewState extends State<ConsoleView> {
           commandBar,
           const SizedBox(height: 8),
           const _QueueNote(),
-          SizedBox(height: MediaQuery.viewInsetsOf(context).bottom + 96),
+          SizedBox(height: MediaQuery.viewInsetsOf(context).bottom > 0 ? 16 : 120),
         ],
       ),
     );
@@ -450,75 +458,84 @@ class _ConsoleHeader extends StatelessWidget {
   @override
   Widget build(BuildContext context) {
     final p = context.nova;
-    return Row(
+    return Column(
+      crossAxisAlignment: CrossAxisAlignment.stretch,
       children: <Widget>[
-        Pill(
-          label: L10n.t('consolePolling'),
-          tone: PillTone.primary,
-          icon: Icons.sync_rounded,
-          dense: true,
-          pulse: monitor.runActive,
-        ),
-        const SizedBox(width: 8),
-        if (monitor.lastRefresh != null)
-          Flexible(
-            child: Text(
-              '${L10n.t('lastUpdated')} ${Fmt.relative(monitor.lastRefresh)}',
-              maxLines: 1,
-              overflow: TextOverflow.ellipsis,
-              style: NovaTextStyles.caption(p.textDim),
+        Row(
+          children: <Widget>[
+            Pill(
+              label: L10n.t('consolePolling'),
+              tone: PillTone.primary,
+              icon: Icons.sync_rounded,
+              dense: true,
+              pulse: monitor.runActive,
             ),
-          ),
-        const Spacer(),
-        NovaChip(
-          label: L10n.t('consoleFollow'),
-          selected: follow,
-          icon: Icons.vertical_align_bottom_rounded,
-          onTap: onToggleFollow,
+            if (monitor.lastRefresh != null) ...<Widget>[
+              const SizedBox(width: 8),
+              Expanded(
+                child: Text(
+                  '${L10n.t('lastUpdated')} ${Fmt.relative(monitor.lastRefresh)}',
+                  maxLines: 1,
+                  overflow: TextOverflow.ellipsis,
+                  textAlign: TextAlign.end,
+                  style: NovaTextStyles.caption(p.textDim),
+                ),
+              ),
+            ],
+          ],
         ),
-        const SizedBox(width: 6),
-        NovaIconButton(
-          icon: Icons.search_rounded,
-          size: 34,
-          iconSize: 17,
-          filled: searchOpen,
-          onTap: onToggleSearch,
-          tooltip: L10n.t('consoleSearch'),
-        ),
-        const SizedBox(width: 6),
-        NovaIconButton(
-          icon: Icons.copy_rounded,
-          size: 34,
-          iconSize: 16,
-          onTap: onCopy,
-          tooltip: L10n.t('copy'),
-        ),
-        const SizedBox(width: 6),
-        NovaIconButton(
-          icon: Icons.delete_sweep_rounded,
-          size: 34,
-          iconSize: 17,
-          onTap: onClear,
-          tooltip: L10n.t('consoleClear'),
-        ),
-        const SizedBox(width: 6),
-        NovaIconButton(
-          icon: Icons.vertical_align_bottom_rounded,
-          size: 34,
-          iconSize: 17,
-          onTap: onJump,
-          tooltip: L10n.t('consoleJumpLatest'),
-        ),
-        const SizedBox(width: 6),
-        NovaIconButton(
-          icon: Icons.refresh_rounded,
-          size: 34,
-          iconSize: 17,
-          onTap: () {
-            monitor.refresh();
-            monitor.loadLogs(force: true);
-          },
-          tooltip: L10n.t('refresh'),
+        const SizedBox(height: 8),
+        Wrap(
+          spacing: 6,
+          runSpacing: 6,
+          crossAxisAlignment: WrapCrossAlignment.center,
+          children: <Widget>[
+            NovaChip(
+              label: L10n.t('consoleFollow'),
+              selected: follow,
+              icon: Icons.vertical_align_bottom_rounded,
+              onTap: onToggleFollow,
+            ),
+            NovaIconButton(
+              icon: Icons.search_rounded,
+              size: 34,
+              iconSize: 17,
+              filled: searchOpen,
+              onTap: onToggleSearch,
+              tooltip: L10n.t('consoleSearch'),
+            ),
+            NovaIconButton(
+              icon: Icons.copy_rounded,
+              size: 34,
+              iconSize: 16,
+              onTap: onCopy,
+              tooltip: L10n.t('copy'),
+            ),
+            NovaIconButton(
+              icon: Icons.delete_sweep_rounded,
+              size: 34,
+              iconSize: 17,
+              onTap: onClear,
+              tooltip: L10n.t('consoleClear'),
+            ),
+            NovaIconButton(
+              icon: Icons.vertical_align_bottom_rounded,
+              size: 34,
+              iconSize: 17,
+              onTap: onJump,
+              tooltip: L10n.t('consoleJumpLatest'),
+            ),
+            NovaIconButton(
+              icon: Icons.refresh_rounded,
+              size: 34,
+              iconSize: 17,
+              onTap: () {
+                monitor.refresh();
+                monitor.loadLogs(force: true);
+              },
+              tooltip: L10n.t('refresh'),
+            ),
+          ],
         ),
       ],
     );

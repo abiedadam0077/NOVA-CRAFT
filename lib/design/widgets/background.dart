@@ -40,7 +40,7 @@ class AuroraBackground extends StatelessWidget {
               right: -120,
               child: GlowOrb(
                 size: 420,
-                color: p.primary.withValues(alpha: 0.30 * intensity),
+                color: p.primary.withValues(alpha: 0.22 * intensity),
               ),
             ),
             Positioned(
@@ -48,7 +48,7 @@ class AuroraBackground extends StatelessWidget {
               left: -200,
               child: GlowOrb(
                 size: 460,
-                color: p.violet.withValues(alpha: 0.20 * intensity),
+                color: p.violet.withValues(alpha: 0.14 * intensity),
               ),
             ),
             Positioned(
@@ -56,7 +56,7 @@ class AuroraBackground extends StatelessWidget {
               right: -60,
               child: GlowOrb(
                 size: 520,
-                color: p.indigo.withValues(alpha: 0.18 * intensity),
+                color: p.indigo.withValues(alpha: 0.12 * intensity),
               ),
             ),
           ] else ...<Widget>[
@@ -77,7 +77,7 @@ class AuroraBackground extends StatelessWidget {
                 child: CustomPaint(
                   painter: _GridPainter(
                     color: p.isDark ? Colors.white : p.primary,
-                    opacity: p.isDark ? 0.035 : 0.05,
+                    opacity: p.isDark ? 0.022 : 0.05,
                   ),
                 ),
               ),
@@ -95,7 +95,7 @@ class AuroraBackground extends StatelessWidget {
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
                       colors: <Color>[
-                        p.primary.withValues(alpha: p.isDark ? 0.10 : 0.05),
+                        p.primary.withValues(alpha: p.isDark ? 0.08 : 0.05),
                         Colors.transparent,
                       ],
                     ),

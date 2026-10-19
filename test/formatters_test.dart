@@ -38,6 +38,17 @@ void main() {
       expect(Fmt.shortSha('abc'), 'abc');
     });
 
+    test('Playit API failures map to honest localized diagnostics', () {
+      expect(Fmt.playitError('http-403'), L10n.t('playitPermissionDenied'));
+      expect(Fmt.playitError('invalid-rundata-schema'), L10n.t('playitInvalidResponse'));
+      expect(Fmt.playitError('timeout'), L10n.t('playitTimeout'));
+      expect(Fmt.playitError('InvalidAgentKey'), L10n.t('playitKeyRejected'));
+      expect(Fmt.playitError('missing-secret'), L10n.t('playitSecretMissing'));
+      L10n.lang = 'ar';
+      expect(Fmt.playitError('http-403'), L10n.t('playitPermissionDenied'));
+      expect(Fmt.playitError('http-403'), isNot(contains('InvalidAgentKey')));
+    });
+
     test('titleCase and phase labels', () {
       expect(Fmt.titleCase('PAPER'), 'Paper');
       expect(Fmt.titleCase(''), '');

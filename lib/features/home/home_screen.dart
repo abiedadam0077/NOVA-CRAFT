@@ -168,14 +168,16 @@ class _ServerHero extends StatelessWidget {
       decoration: BoxDecoration(
         color: p.card,
         borderRadius: NovaRadii.rXl,
-        border: Border.all(color: online ? p.success.withValues(alpha: 0.4) : p.stroke),
+        border: Border.all(
+          color: online ? p.success.withValues(alpha: 0.4) : p.primary.withValues(alpha: 0.22),
+        ),
         boxShadow: NovaShadows.lifted(p),
       ),
       child: Column(
         crossAxisAlignment: CrossAxisAlignment.start,
         children: <Widget>[
           SizedBox(
-            height: 132,
+            height: 150,
             child: Stack(
               fit: StackFit.expand,
               children: <Widget>[
@@ -186,16 +188,16 @@ class _ServerHero extends StatelessWidget {
                       begin: Alignment.topCenter,
                       end: Alignment.bottomCenter,
                       colors: <Color>[
-                        p.bg.withValues(alpha: 0.15),
-                        p.card.withValues(alpha: 0.75),
+                        p.bg.withValues(alpha: 0.08),
+                        p.card.withValues(alpha: 0.58),
                         p.card,
                       ],
                     ),
                   ),
                 ),
-                Positioned(
+                PositionedDirectional(
                   top: 12,
-                  left: 12,
+                  start: 12,
                   child: StatusPill(phase: monitor.phase, dense: true),
                 ),
               ],

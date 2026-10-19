@@ -1,7 +1,7 @@
 name: nova_craft
 description: "NOVA CRAFT — Minecraft server manager built on GitHub Actions and Playit.gg."
 publish_to: "none"
-version: 1.0.0+1
+version: 1.0.0+2
 
 environment:
   sdk: ">=3.5.0 <4.0.0"
@@ -11,7 +11,8 @@ dependencies:
     sdk: flutter
   flutter_localizations:
     sdk: flutter
-  http: ^1.2.2
+  http: ^1.5.0
+  crypto: ^3.0.6
   shared_preferences: ^2.3.3
   flutter_secure_storage: ^9.2.2
   url_launcher: ^6.3.1

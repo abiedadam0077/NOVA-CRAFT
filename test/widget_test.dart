@@ -51,9 +51,12 @@ void main() {
     expect(find.byIcon(Icons.content_copy_rounded), findsNothing);
   });
 
-  testWidgets('ServerAvatar paints initials', (WidgetTester tester) async {
+  testWidgets('ServerAvatar uses the NOVA voxel fallback when no image is set', (WidgetTester tester) async {
     await tester.pumpWidget(_host(const ServerAvatar(name: 'Island', size: 56, software: 'PAPER')));
-    expect(find.text('IS'), findsOneWidget);
+    final Image image = tester.widget<Image>(
+      find.byWidgetPredicate((Widget widget) => widget is Image && widget.image is AssetImage),
+    );
+    expect((image.image as AssetImage).assetName, 'assets/images/hero_castle_card.jpg');
   });
 
   testWidgets('arabic directionality is preserved by the shell host', (WidgetTester tester) async {
@@ -91,6 +94,38 @@ void main() {
     expect(find.text(L10n.t('navServerSettings')), findsOneWidget);
     await tester.tap(find.text(L10n.t('navServerSettings')));
     expect(selected, 4);
+  });
+
+  testWidgets('navigation and section cards fit a narrow RTL/LTR viewport', (WidgetTester tester) async {
+    await tester.binding.setSurfaceSize(const Size(320, 640));
+    addTearDown(() async => tester.binding.setSurfaceSize(null));
+
+    final List<NovaNavItem> items = <NovaNavItem>[
+      NovaNavItem(label: L10n.t('navHome'), icon: Icons.home_outlined),
+      NovaNavItem(label: L10n.t('navConsole'), icon: Icons.terminal_outlined),
+      NovaNavItem(label: L10n.t('navFiles'), icon: Icons.folder_outlined),
+      NovaNavItem(label: L10n.t('navMods'), icon: Icons.extension_outlined),
+      NovaNavItem(label: L10n.t('navServerSettings'), icon: Icons.tune_outlined),
+    ];
+
+    for (final TextDirection direction in <TextDirection>[TextDirection.rtl, TextDirection.ltr]) {
+      await tester.pumpWidget(_host(
+        NovaBottomBar(index: 0, onChanged: (_) {}, items: items),
+        direction: direction,
+      ));
+      expect(tester.takeException(), isNull);
+      await tester.pumpWidget(_host(
+        SectionCard(
+          title: 'إعدادات السيرفر المتقدمة',
+          icon: Icons.settings_rounded,
+          actionLabel: 'عرض الكل',
+          onAction: () {},
+          child: const Text('تفاصيل الإعدادات'),
+        ),
+        direction: direction,
+      ));
+      expect(tester.takeException(), isNull);
+    }
   });
 
   testWidgets('a server path can never escape the data folder', (WidgetTester tester) async {

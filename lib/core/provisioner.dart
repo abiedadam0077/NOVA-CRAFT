@@ -5,6 +5,7 @@ import 'dart:typed_data';
 
 import 'github_api.dart';
 import 'models.dart';
+import 'validation.dart';
 import 'workflow_templates.dart';
 
 /// Writes the files that turn a repository into a NOVA CRAFT server, and
@@ -30,6 +31,7 @@ class Provisioner {
   static const String addonsPath = 'nova-craft/addons';
   static const String addonStatePath = 'nova-craft/addons/state.json';
   static const String addonResultPath = 'nova-craft/addons/result.json';
+  static const String importResultPath = 'nova-craft/import/result.json';
 
   static Future<void> _putText(GitHubApi api, ServerConfig c, String path, String text, String message) async {
     final String? sha = await api.fileSha(c.repoOwner, c.repoName, path, branch: c.defaultBranch);
@@ -75,6 +77,18 @@ class Provisioner {
     }
   }
 
+  /// Upgrades only NOVA CRAFT's generated workflow/helpers for an existing
+  /// server repository. It deliberately leaves server.json, game properties,
+  /// the world, backups and repository Secrets untouched.
+  static Future<void> updateRunnerFiles(GitHubApi api, ServerConfig c) async {
+    await _putText(api, c, configScriptPath, WorkflowTemplates.configScript, 'nova: update runner config bridge');
+    await _putText(api, c, fileOpsPath, WorkflowTemplates.fileOpsScript, 'nova: update runner file operations');
+    await _putText(api, c, playitScriptPath, WorkflowTemplates.playitScript, 'nova: update Playit diagnostics');
+    await _putText(api, c, runnerPath, WorkflowTemplates.runnerScript, 'nova: update server runner');
+    await _putText(api, c, '.github/workflows/$workflowFile', WorkflowTemplates.serverWorkflow(c.id), 'nova: update server workflow');
+    await _putText(api, c, '$commandsPath/.gitkeep', '', 'nova: update command queue');
+  }
+
   /// Writes settings without touching the EULA flag or the download pin.
   static Future<void> updateConfig(GitHubApi api, ServerConfig c) async {
     await _putText(api, c, configPath, const JsonEncoder.withIndent('  ').convert(c.toJson()), 'nova: update config');
@@ -100,6 +114,9 @@ class Provisioner {
   }
 
   static Future<void> restoreBackup(GitHubApi api, ServerConfig c, String tag) {
+    if (!tag.startsWith('backup-${c.id}-') || !RegExp(r'^backup-[A-Za-z0-9_-]+$').hasMatch(tag)) {
+      throw ApiException(400, 'Backup tag does not belong to this server');
+    }
     return api.dispatch(
       c.repoOwner,
       c.repoName,
@@ -112,19 +129,40 @@ class Provisioner {
     return api.cancelRun(c.repoOwner, c.repoName, runId);
   }
 
-  static Future<void> sendCommand(GitHubApi api, ServerConfig c, String command) async {
+  static Future<void> sendCommand(
+    GitHubApi api,
+    ServerConfig c,
+    String command, {
+    bool confirmedDangerous = false,
+    bool system = false,
+  }) async {
     final String trimmed = command.trim();
-    if (trimmed.isEmpty || trimmed.length > 512) {
-      throw ApiException(400, 'Command is empty or too long');
+    if (!Validation.isSafeConsoleCommand(trimmed)) {
+      throw ApiException(400, 'Command is empty, too long, or contains control characters');
+    }
+    final String commandRoot = trimmed.toLowerCase().replaceFirst(RegExp(r'^/'), '');
+    if (!system && commandRoot.startsWith('nova:')) {
+      throw ApiException(400, 'The nova: command namespace is reserved for the system');
+    }
+    if (!system && !c.allowCommands) {
+      throw ApiException(403, 'Console commands are disabled in this server configuration');
+    }
+    if (!system && Validation.isDangerousCommand(trimmed) && !confirmedDangerous) {
+      throw ApiException(400, 'This command requires explicit confirmation');
     }
     final String name = '$commandsPath/${DateTime.now().millisecondsSinceEpoch}-${_randomSuffix()}.txt';
     final String? sha = await api.fileSha(c.repoOwner, c.repoName, name);
     await api.putText(c.repoOwner, c.repoName, name, trimmed, 'nova: queue command', sha: sha);
   }
 
-  /// Stops gracefully: the runner flushes saves, uploads a backup, then exits.
+  /// Stops gracefully; the system stop signal is allowed even when user
+  /// console commands are disabled.
   static Future<void> stopServer(GitHubApi api, ServerConfig c) async {
-    await sendCommand(api, c, 'nova:stop');
+    await sendCommand(api, c, 'nova:stop', system: true);
+  }
+
+  static Future<void> requestBackup(GitHubApi api, ServerConfig c) async {
+    await sendCommand(api, c, 'nova:backup', system: true);
   }
 
   /// A stop request makes the runner skip its self-restart; the explicit
@@ -132,7 +170,7 @@ class Provisioner {
   /// the two runs instead of racing them.
   static Future<void> restartServer(GitHubApi api, ServerConfig c, {required bool activeRun}) async {
     if (activeRun) {
-      await sendCommand(api, c, 'nova:stop');
+      await sendCommand(api, c, 'nova:stop', system: true);
     }
     await startServer(api, c);
   }
@@ -140,12 +178,13 @@ class Provisioner {
   /// Queues a world archive; the runner extracts it into the data folder, then
   /// deletes the upload so the repository does not grow without bound.
   static Future<void> uploadWorldImport(GitHubApi api, ServerConfig c, Uint8List zipBytes, {String? name}) async {
+    final String activeWorldName = name ?? (c.isBedrock ? 'Bedrock level' : 'world');
     await _putBytes(api, c, 'nova-craft/import/world.zip', zipBytes, 'nova: import world');
     await _putText(
       api,
       c,
       'nova-craft/import/world.json',
-      jsonEncode(<String, dynamic>{'name': name ?? 'Imported world', 'uploadedAt': DateTime.now().toUtc().toIso8601String()}),
+      jsonEncode(<String, dynamic>{'name': activeWorldName, 'uploadedAt': DateTime.now().toUtc().toIso8601String()}),
       'nova: import world metadata',
     );
   }

@@ -12,9 +12,14 @@ import 'models.dart';
 /// Thin GitHub REST client. Only public identifiers are used for the OAuth
 /// Device Flow: no client secret, no private key, no redirect URI.
 class GitHubApi {
-  GitHubApi({http.Client? client}) : _client = client ?? http.Client();
+  GitHubApi({http.Client? client, Duration timeout = defaultTimeout})
+      : _client = client ?? http.Client(),
+        _timeout = timeout;
+
+  static const Duration defaultTimeout = Duration(seconds: 40);
 
   final http.Client _client;
+  final Duration _timeout;
   String? accessToken;
   String? lastRateLimitRemaining;
 
@@ -22,8 +27,6 @@ class GitHubApi {
   /// branch that actually exists; assuming `main` breaks older accounts (and
   /// any repository whose default branch is `master` or custom).
   final Map<String, String> _defaultBranches = <String, String>{};
-
-  static const Duration _timeout = Duration(seconds: 40);
 
   Map<String, String> _headers({bool json = true, String? token, bool acceptRaw = false}) {
     final Map<String, String> headers = <String, String>{
@@ -45,16 +48,35 @@ class GitHubApi {
     Object? jsonBody,
     Map<String, String>? headers,
     bool follow = true,
+    Future<void>? abortTrigger,
   }) async {
-    final http.Request request = http.Request(method, Uri.parse(url));
+    final Completer<void> requestAbort = Completer<void>();
+    void abort() {
+      if (!requestAbort.isCompleted) requestAbort.complete();
+    }
+
+    if (abortTrigger != null) {
+      unawaited(abortTrigger.then<void>((_) => abort()));
+    }
+    final http.Request request = http.AbortableRequest(
+      method,
+      Uri.parse(url),
+      abortTrigger: requestAbort.future,
+    );
     request.headers.addAll(headers ?? _headers());
     if (jsonBody != null) {
       request.headers['Content-Type'] = 'application/json';
       request.body = jsonEncode(jsonBody);
     }
     request.followRedirects = follow;
-    final http.StreamedResponse streamed = await _client.send(request).timeout(_timeout);
-    final http.Response response = await http.Response.fromStream(streamed).timeout(_timeout);
+    final http.StreamedResponse streamed = await _client.send(request).timeout(_timeout, onTimeout: () {
+      abort();
+      throw TimeoutException('GitHub API $method timed out after ${_timeout.inSeconds}s');
+    });
+    final http.Response response = await http.Response.fromStream(streamed).timeout(_timeout, onTimeout: () {
+      abort();
+      throw TimeoutException('GitHub API response timed out after ${_timeout.inSeconds}s');
+    });
     lastRateLimitRemaining = response.headers['x-ratelimit-remaining'];
     return response;
   }
@@ -95,6 +117,31 @@ class GitHubApi {
     if (response.statusCode < 200 || response.statusCode >= 300) _throwFor(response);
     if (response.body.isEmpty) return null;
     return jsonDecode(utf8.decode(response.bodyBytes));
+  }
+
+  /// Fetches every page of a REST collection. GitHub's default is 30 and
+  /// silently returning only the first page hid repositories/releases for
+  /// larger accounts.
+  Future<List<dynamic>> _getAllPages(String url, {String? arrayKey}) async {
+    final Uri base = Uri.parse(url);
+    final List<dynamic> all = <dynamic>[];
+    for (int page = 1; page <= 100; page++) {
+      final Map<String, String> query = <String, String>{
+        ...base.queryParameters,
+        'per_page': '100',
+        'page': '$page',
+      };
+      final dynamic data = _decode(await _send('GET', base.replace(queryParameters: query).toString()));
+      final List<dynamic>? values = data is List
+          ? data
+          : data is Map && arrayKey != null && data[arrayKey] is List
+              ? data[arrayKey] as List<dynamic>
+              : null;
+      if (values == null) throw ApiException(502, 'Malformed GitHub collection response');
+      all.addAll(values);
+      if (values.length < 100) break;
+    }
+    return all;
   }
 
   // ------------------------------------------------------------ Device Flow
@@ -190,47 +237,34 @@ class GitHubApi {
   }
 
   Future<List<GhInstallation>> listInstallations() async {
-    final dynamic data = _decode(await _send('GET', '${AppConfig.githubApi}/user/installations?per_page=100'));
+    final List<dynamic> data = await _getAllPages('${AppConfig.githubApi}/user/installations', arrayKey: 'installations');
     final List<GhInstallation> out = <GhInstallation>[];
-    if (data is Map && data['installations'] is List) {
-      for (final dynamic raw in data['installations'] as List) {
-        if (raw is Map) {
-          final Map<String, dynamic> account = raw['account'] is Map ? Map<String, dynamic>.from(raw['account'] as Map) : <String, dynamic>{};
-          out.add(GhInstallation(
-            (raw['id'] as num?)?.toInt() ?? 0,
-            account['login']?.toString() ?? '',
-            account['type']?.toString() ?? '',
-          ));
-        }
+    for (final dynamic raw in data) {
+      if (raw is Map) {
+        final Map<String, dynamic> account = raw['account'] is Map ? Map<String, dynamic>.from(raw['account'] as Map) : <String, dynamic>{};
+        out.add(GhInstallation(
+          (raw['id'] as num?)?.toInt() ?? 0,
+          account['login']?.toString() ?? '',
+          account['type']?.toString() ?? '',
+        ));
       }
     }
     return out;
   }
 
   Future<List<GhRepo>> listInstallationRepos(int installationId) async {
-    final dynamic data = _decode(
-      await _send('GET', '${AppConfig.githubApi}/user/installations/$installationId/repositories?per_page=100'),
+    final List<dynamic> data = await _getAllPages(
+      '${AppConfig.githubApi}/user/installations/$installationId/repositories',
+      arrayKey: 'repositories',
     );
-    final List<GhRepo> out = <GhRepo>[];
-    if (data is Map && data['repositories'] is List) {
-      for (final dynamic raw in data['repositories'] as List) {
-        if (raw is Map) out.add(GhRepo.fromJson(Map<String, dynamic>.from(raw)));
-      }
-    }
-    return out;
+    return data.whereType<Map>().map((Map raw) => GhRepo.fromJson(Map<String, dynamic>.from(raw))).toList();
   }
 
   Future<List<GhRepo>> listUserRepos() async {
-    final dynamic data = _decode(
-      await _send('GET', '${AppConfig.githubApi}/user/repos?per_page=100&sort=updated&affiliation=owner,collaborator'),
+    final List<dynamic> data = await _getAllPages(
+      '${AppConfig.githubApi}/user/repos?sort=updated&affiliation=owner,collaborator',
     );
-    final List<GhRepo> out = <GhRepo>[];
-    if (data is List) {
-      for (final dynamic raw in data) {
-        if (raw is Map) out.add(GhRepo.fromJson(Map<String, dynamic>.from(raw)));
-      }
-    }
-    return out;
+    return data.whereType<Map>().map((Map raw) => GhRepo.fromJson(Map<String, dynamic>.from(raw))).toList();
   }
 
   Future<GhRepo> createRepo(String name, bool isPrivate, String description) async {
@@ -267,13 +301,13 @@ class GitHubApi {
   }
 
   // --------------------------------------------------------------- contents
-  Future<List<DirEntry>> listDir(String owner, String repo, String path, {String? branch}) async {
+  Future<List<DirEntry>> listDir(String owner, String repo, String path, {String? branch, Future<void>? abortTrigger}) async {
     final String clean = _cleanPath(path);
     final String ref = branch ?? await defaultBranchOf(owner, repo);
     final Uri uri = Uri.parse('${AppConfig.githubApi}/repos/$owner/$repo/contents$clean').replace(
       queryParameters: <String, String>{'ref': ref},
     );
-    final http.Response response = await _send('GET', uri.toString());
+    final http.Response response = await _send('GET', uri.toString(), abortTrigger: abortTrigger);
     if (response.statusCode == 404) return <DirEntry>[];
     final dynamic data = _decode(response);
     final List<DirEntry> out = <DirEntry>[];
@@ -289,30 +323,48 @@ class GitHubApi {
     return out;
   }
 
-  Future<Map<String, dynamic>> _contentMeta(String owner, String repo, String path, {String? branch}) async {
+  Future<Map<String, dynamic>> _contentMeta(
+    String owner,
+    String repo,
+    String path, {
+    String? branch,
+    Future<void>? abortTrigger,
+  }) async {
     final String ref = branch ?? await defaultBranchOf(owner, repo);
     final Uri uri = Uri.parse('${AppConfig.githubApi}/repos/$owner/$repo/contents${_cleanPath(path)}').replace(
       queryParameters: <String, String>{'ref': ref},
     );
-    final dynamic data = _decode(await _send('GET', uri.toString()));
+    final dynamic data = _decode(await _send('GET', uri.toString(), abortTrigger: abortTrigger));
     if (data is! Map) throw ApiException(400, 'Not a file');
     return Map<String, dynamic>.from(data);
   }
 
-  Future<String> getFileText(String owner, String repo, String path, {String? branch}) async {
-    final Map<String, dynamic> meta = await _contentMeta(owner, repo, path, branch: branch);
+  Future<String> getFileText(
+    String owner,
+    String repo,
+    String path, {
+    String? branch,
+    Future<void>? abortTrigger,
+  }) async {
+    final Map<String, dynamic> meta = await _contentMeta(owner, repo, path, branch: branch, abortTrigger: abortTrigger);
     final String? content = meta['content']?.toString();
     if (content == null || content.isEmpty) {
-      return utf8.decode(await getFileBytes(owner, repo, path, branch: branch), allowMalformed: true);
+      return utf8.decode(await getFileBytes(owner, repo, path, branch: branch, abortTrigger: abortTrigger), allowMalformed: true);
     }
     return utf8.decode(base64Decode(content.replaceAll('\n', '')));
   }
 
-  Future<Uint8List> getFileBytes(String owner, String repo, String path, {String? branch}) async {
-    final Map<String, dynamic> meta = await _contentMeta(owner, repo, path, branch: branch);
+  Future<Uint8List> getFileBytes(
+    String owner,
+    String repo,
+    String path, {
+    String? branch,
+    Future<void>? abortTrigger,
+  }) async {
+    final Map<String, dynamic> meta = await _contentMeta(owner, repo, path, branch: branch, abortTrigger: abortTrigger);
     final int size = (meta['size'] as num?)?.toInt() ?? 0;
     if (size > 1000000 && meta['git_url'] != null) {
-      final dynamic blob = _decode(await _send('GET', meta['git_url'].toString()));
+      final dynamic blob = _decode(await _send('GET', meta['git_url'].toString(), abortTrigger: abortTrigger));
       if (blob is Map) {
         final String? content = blob['content']?.toString();
         if (content != null) return Uint8List.fromList(base64Decode(content.replaceAll('\n', '')));
@@ -323,9 +375,15 @@ class GitHubApi {
     return Uint8List.fromList(base64Decode(content.replaceAll('\n', '')));
   }
 
-  Future<String?> fileSha(String owner, String repo, String path, {String? branch}) async {
+  Future<String?> fileSha(
+    String owner,
+    String repo,
+    String path, {
+    String? branch,
+    Future<void>? abortTrigger,
+  }) async {
     try {
-      final Map<String, dynamic> meta = await _contentMeta(owner, repo, path, branch: branch);
+      final Map<String, dynamic> meta = await _contentMeta(owner, repo, path, branch: branch, abortTrigger: abortTrigger);
       return meta['sha']?.toString();
     } on ApiException catch (error) {
       if (error.status == 404) return null;
@@ -341,6 +399,7 @@ class GitHubApi {
     String message, {
     String? sha,
     String? branch,
+    Future<void>? abortTrigger,
   }) async {
     final String target = branch ?? await defaultBranchOf(owner, repo);
     if (bytes.length <= 1000000) {
@@ -350,10 +409,15 @@ class GitHubApi {
         if (sha != null) 'sha': sha,
         'branch': target,
       };
-      _decode(await _send('PUT', '${AppConfig.githubApi}/repos/$owner/$repo/contents${_cleanPath(path)}', jsonBody: body));
+      _decode(await _send(
+        'PUT',
+        '${AppConfig.githubApi}/repos/$owner/$repo/contents${_cleanPath(path)}',
+        jsonBody: body,
+        abortTrigger: abortTrigger,
+      ));
       return;
     }
-    await uploadViaGitData(owner, repo, path, bytes, message, branch: target);
+    await uploadViaGitData(owner, repo, path, bytes, message, branch: target, abortTrigger: abortTrigger);
   }
 
   Future<void> putText(
@@ -416,6 +480,7 @@ class GitHubApi {
     Uint8List bytes,
     String message, {
     String? branch,
+    Future<void>? abortTrigger,
   }) async {
     final String base = '${AppConfig.githubApi}/repos/$owner/$repo';
     final String target = branch ?? await defaultBranchOf(owner, repo);
@@ -423,12 +488,13 @@ class GitHubApi {
       'POST',
       '$base/git/blobs',
       jsonBody: <String, dynamic>{'content': base64Encode(bytes), 'encoding': 'base64'},
+      abortTrigger: abortTrigger,
     ));
     if (blob is! Map) throw ApiException(500, 'Blob upload failed');
-    final dynamic ref = _decode(await _send('GET', '$base/git/ref/heads/$target'));
+    final dynamic ref = _decode(await _send('GET', '$base/git/ref/heads/$target', abortTrigger: abortTrigger));
     if (ref is! Map) throw ApiException(500, 'Could not read branch');
     final String commitSha = (ref['object'] as Map)['sha'].toString();
-    final dynamic commit = _decode(await _send('GET', '$base/git/commits/$commitSha'));
+    final dynamic commit = _decode(await _send('GET', '$base/git/commits/$commitSha', abortTrigger: abortTrigger));
     if (commit is! Map) throw ApiException(500, 'Could not read commit');
     final String treeSha = (commit['tree'] as Map)['sha'].toString();
     final dynamic tree = _decode(await _send(
@@ -445,6 +511,7 @@ class GitHubApi {
           }
         ],
       },
+      abortTrigger: abortTrigger,
     ));
     if (tree is! Map) throw ApiException(500, 'Tree creation failed');
     final dynamic newCommit = _decode(await _send(
@@ -455,12 +522,14 @@ class GitHubApi {
         'tree': tree['sha'],
         'parents': <String>[commitSha],
       },
+      abortTrigger: abortTrigger,
     ));
     if (newCommit is! Map) throw ApiException(500, 'Commit creation failed');
     _decode(await _send(
       'PATCH',
       '$base/git/refs/heads/$target',
       jsonBody: <String, dynamic>{'sha': newCommit['sha']},
+      abortTrigger: abortTrigger,
     ));
   }
 
@@ -505,11 +574,22 @@ class GitHubApi {
     final String url = workflow == null
         ? '${AppConfig.githubApi}/repos/$owner/$repo/actions/runs?per_page=20'
         : '${AppConfig.githubApi}/repos/$owner/$repo/actions/workflows/$workflow/runs?per_page=20';
-    final dynamic data = _decode(await _send('GET', url));
+    dynamic data;
+    try {
+      data = _decode(await _send('GET', url));
+    } on FormatException {
+      throw ApiException(502, 'Malformed GitHub Actions workflow-runs JSON response');
+    }
+    if (data is! Map || data['workflow_runs'] is! List) {
+      throw ApiException(502, 'Malformed GitHub Actions workflow-runs response');
+    }
     final List<WorkflowRun> out = <WorkflowRun>[];
-    if (data is Map && data['workflow_runs'] is List) {
-      for (final dynamic raw in data['workflow_runs'] as List) {
-        if (raw is Map) out.add(WorkflowRun.fromJson(Map<String, dynamic>.from(raw)));
+    for (final dynamic raw in data['workflow_runs'] as List) {
+      if (raw is! Map) throw ApiException(502, 'Malformed GitHub Actions workflow-run entry');
+      try {
+        out.add(WorkflowRun.fromJson(Map<String, dynamic>.from(raw)));
+      } on TypeError {
+        throw ApiException(502, 'Malformed GitHub Actions workflow-run fields');
       }
     }
     return out;
@@ -574,14 +654,8 @@ class GitHubApi {
 
   // --------------------------------------------------------------- releases
   Future<List<ReleaseInfo>> listReleases(String owner, String repo) async {
-    final dynamic data = _decode(await _send('GET', '${AppConfig.githubApi}/repos/$owner/$repo/releases?per_page=50'));
-    final List<ReleaseInfo> out = <ReleaseInfo>[];
-    if (data is List) {
-      for (final dynamic raw in data) {
-        if (raw is Map) out.add(ReleaseInfo.fromJson(Map<String, dynamic>.from(raw)));
-      }
-    }
-    return out;
+    final List<dynamic> data = await _getAllPages('${AppConfig.githubApi}/repos/$owner/$repo/releases');
+    return data.whereType<Map>().map((Map raw) => ReleaseInfo.fromJson(Map<String, dynamic>.from(raw))).toList();
   }
 
   Future<void> deleteRelease(String owner, String repo, int releaseId) async {
@@ -620,6 +694,15 @@ class GitHubApi {
       }
     }
     return out;
+  }
+
+  Future<void> deleteSecret(String owner, String repo, String name) async {
+    final http.Response response = await _send(
+      'DELETE',
+      '${AppConfig.githubApi}/repos/$owner/$repo/actions/secrets/${Uri.encodeComponent(name)}',
+    );
+    if (response.statusCode == 404) return;
+    _decode(response);
   }
 
   /// Encrypts with the repository public key using libsodium's sealed box

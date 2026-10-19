@@ -2,7 +2,7 @@ name: Flutter Build & Delivery
 
 on:
   push:
-    branches: ["arena/9ee1fafe-nova-craft", "arena/5a6ddfcf-nova-craft", "main"]
+    branches: ["arena/9027d464-nova-craft", "main"]
     paths-ignore: ["README.md", "docs/**"]
   workflow_dispatch:
 
@@ -86,29 +86,84 @@ jobs:
           NOVA_KEYSTORE_PATH: ${{ runner.temp }}/nova-release.p12
         run: |
           set -euo pipefail
+          exec > >(tee /tmp/build-step.log) 2>&1
           mkdir -p delivery
           if [ -n "${NOVA_KEYSTORE_BASE64:-}" ] && [ -n "${NOVA_KEYSTORE_PASSWORD:-}" ]; then
             printf '%s' "$NOVA_KEYSTORE_BASE64" | base64 --decode > "$NOVA_KEYSTORE_PATH"
             flutter build apk --release --android-skip-build-dependency-validation --no-shrink 2>&1 | tee /tmp/build.log
             cp build/app/outputs/flutter-apk/app-release.apk delivery/NOVA-CRAFT-1.0.0-release.apk
-            echo "BUILD_KIND=release" >> "$GITHUB_ENV"
+            SIGNING_STORE="$NOVA_KEYSTORE_PATH"
+            SIGNING_STORE_TYPE="PKCS12"
+            SIGNING_STORE_PASSWORD="$NOVA_KEYSTORE_PASSWORD"
+            SIGNING_KEY_ALIAS="$NOVA_KEY_ALIAS"
+            SIGNING_KEY_PASSWORD="$NOVA_KEY_PASSWORD"
+            BUILD_KIND="release"
           else
             echo "Release keystore secrets are unavailable in this repository."
-            echo "Delivering AOT release builds signed with the CI debug key; no new release key is generated."
+            echo "The APKs will be non-production debug-signed builds; no production release key is configured."
             flutter build apk --release --android-skip-build-dependency-validation --no-shrink 2>&1 | tee /tmp/build.log
             cp build/app/outputs/flutter-apk/app-release.apk delivery/NOVA-CRAFT-1.0.0-release-debugsigned.apk
             flutter build apk --release --android-skip-build-dependency-validation --no-shrink --split-per-abi 2>&1 | tee -a /tmp/build.log
             if [ -f build/app/outputs/flutter-apk/app-arm64-v8a-release.apk ]; then
               cp build/app/outputs/flutter-apk/app-arm64-v8a-release.apk delivery/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk
             fi
-            echo "BUILD_KIND=release (debug-signed)" >> "$GITHUB_ENV"
+            echo "Creating an ephemeral CI debug keystore for this non-production debug-signed APK."
+            SIGNING_STORE="$RUNNER_TEMP/nova-debug.keystore"
+            SIGNING_STORE_TYPE="JKS"
+            keytool -genkeypair -v \
+              -keystore "$SIGNING_STORE" \
+              -storetype JKS \
+              -storepass android \
+              -keypass android \
+              -alias androiddebugkey \
+              -keyalg RSA -keysize 2048 -validity 10000 \
+              -dname "CN=Android Debug,O=Android,C=US" \
+              -noprompt
+            SIGNING_STORE_PASSWORD="android"
+            SIGNING_KEY_ALIAS="androiddebugkey"
+            SIGNING_KEY_PASSWORD="android"
+            BUILD_KIND="release (debug-signed)"
           fi
+
+          ZIPALIGN=$(find "$ANDROID_HOME/build-tools" -name zipalign | sort -V | tail -1)
+          APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          export NOVA_APK_KS_PASS="$SIGNING_STORE_PASSWORD"
+          export NOVA_APK_KEY_PASS="$SIGNING_KEY_PASSWORD"
+          for APK in delivery/*.apk; do
+            ALIGNED="${APK%.apk}.aligned.apk"
+            SIGNED="${APK%.apk}.signed.apk"
+            "$ZIPALIGN" -f -p 4 "$APK" "$ALIGNED"
+            # The manifest remains minSdk 26; lower this signing floor only so
+            # apksigner emits the legacy JAR/v1 signature as well as v2/v3.
+            "$APKSIGNER" sign \
+              --ks "$SIGNING_STORE" \
+              --ks-type "$SIGNING_STORE_TYPE" \
+              --ks-key-alias "$SIGNING_KEY_ALIAS" \
+              --ks-pass env:NOVA_APK_KS_PASS \
+              --key-pass env:NOVA_APK_KEY_PASS \
+              --min-sdk-version 19 \
+              --v1-signing-enabled true \
+              --v2-signing-enabled true \
+              --v3-signing-enabled true \
+              --out "$SIGNED" "$ALIGNED"
+            mv "$SIGNED" "$APK"
+            rm -f "$ALIGNED"
+            if [[ "$APK" == *arm64* ]]; then
+              cp "$APK" build/app/outputs/flutter-apk/app-arm64-v8a-release.apk
+            else
+              cp "$APK" build/app/outputs/flutter-apk/app-release.apk
+            fi
+          done
+          unset NOVA_APK_KS_PASS NOVA_APK_KEY_PASS SIGNING_STORE_PASSWORD SIGNING_KEY_PASSWORD
+          echo "BUILD_KIND=$BUILD_KIND" >> "$GITHUB_ENV"
 
       - name: Verify APK package, signature and checksum
         run: |
           set -euo pipefail
+          exec > >(tee /tmp/verify-step.log) 2>&1
           AAPT=$(find "$ANDROID_HOME/build-tools" -name aapt | sort -V | tail -1)
           APKSIGNER=$(find "$ANDROID_HOME/build-tools" -name apksigner | sort -V | tail -1)
+          ZIPALIGN=$(find "$ANDROID_HOME/build-tools" -name zipalign | sort -V | tail -1)
           : > delivery/package-info.txt
           : > delivery/signature-verification.txt
           for APK in delivery/*.apk; do
@@ -117,7 +172,12 @@ jobs:
             grep -q "package: name='io.github.abiedadam0077.novacraft'" delivery/package-info.txt
             grep -q "versionName='1.0.0'" delivery/package-info.txt
             echo "== $APK" | tee -a delivery/signature-verification.txt
-            "$APKSIGNER" verify --verbose --print-certs "$APK" | tee -a delivery/signature-verification.txt
+            VERIFY_REPORT=$(mktemp)
+            "$APKSIGNER" verify --verbose --min-sdk-version 19 --print-certs "$APK" 2>&1 | tee "$VERIFY_REPORT" | tee -a delivery/signature-verification.txt
+            grep -Fq 'Verified using v1 scheme (JAR signing): true' "$VERIFY_REPORT"
+            grep -Fq 'Verified using v2 scheme (APK Signature Scheme v2): true' "$VERIFY_REPORT"
+            "$ZIPALIGN" -c -v 4 "$APK" | tee -a delivery/signature-verification.txt
+            rm -f "$VERIFY_REPORT"
           done
           (cd delivery && sha256sum *.apk > SHA256SUMS.txt)
           du -h delivery/*.apk
@@ -126,9 +186,7 @@ jobs:
         uses: actions/upload-artifact@v4
         with:
           name: nova-craft-flutter-${{ github.run_id }}
-          path: |
-            delivery/
-            build/app/outputs/flutter-apk/
+          path: delivery/
           if-no-files-found: error
           retention-days: 30
 
@@ -173,8 +231,14 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: |
-          echo "Build failed. Inspect the analyze/test output above." >> "$GITHUB_STEP_SUMMARY"
-          if [ -s /tmp/build.log ]; then
+          echo "Build failed. Inspect the build/signing step logs above." >> "$GITHUB_STEP_SUMMARY"
+          if [ -s /tmp/verify-step.log ]; then
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -f body="$(tail -c 55000 /tmp/verify-step.log || true)" || true
+          elif [ -s /tmp/build-step.log ]; then
+            gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
+              -f body="$(tail -c 55000 /tmp/build-step.log || true)" || true
+          elif [ -s /tmp/build.log ]; then
             gh api -X POST "repos/${GITHUB_REPOSITORY}/commits/${GITHUB_SHA}/comments" \
               -f body="$(tail -c 55000 /tmp/build.log || true)" || true
           fi

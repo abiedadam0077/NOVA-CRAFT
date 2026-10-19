@@ -15,9 +15,10 @@ import '../../state/app_state.dart';
 import '../account/account_screen.dart';
 
 class SettingsScreen extends StatelessWidget {
-  const SettingsScreen({super.key, required this.active});
+  const SettingsScreen({super.key, required this.active, this.showHeader = true});
 
   final bool active;
+  final bool showHeader;
 
   @override
   Widget build(BuildContext context) {
@@ -26,21 +27,23 @@ class SettingsScreen extends StatelessWidget {
     return SafeArea(
       bottom: false,
       child: ListView(
-        padding: const EdgeInsets.fromLTRB(NovaSpace.page, 10, NovaSpace.page, 130),
+        padding: EdgeInsets.fromLTRB(NovaSpace.page, showHeader ? 10 : 8, NovaSpace.page, showHeader ? 130 : 24),
         physics: const BouncingScrollPhysics(),
         children: <Widget>[
-          Row(
-            children: <Widget>[
-              const BrandLockup(markSize: 30, fontSize: 14, letterSpacing: 2.2),
-              const Spacer(),
-              Pill(label: 'v${AppConfig.versionName}', tone: PillTone.neutral, dense: true),
-            ],
-          ),
-          const SizedBox(height: 16),
-          Text(L10n.t('settingsTitle'), style: NovaTextStyles.display(27, p.text)),
-          const SizedBox(height: 3),
-          Text(L10n.t('settingsSubtitle'), style: NovaTextStyles.small(p.textMuted)),
-          const SizedBox(height: 16),
+          if (showHeader) ...<Widget>[
+            Row(
+              children: <Widget>[
+                const BrandLockup(markSize: 30, fontSize: 14, letterSpacing: 2.2),
+                const Spacer(),
+                Pill(label: 'v${AppConfig.versionName}', tone: PillTone.neutral, dense: true),
+              ],
+            ),
+            const SizedBox(height: 16),
+            Text(L10n.t('settingsTitle'), style: NovaTextStyles.display(27, p.text)),
+            const SizedBox(height: 3),
+            Text(L10n.t('settingsSubtitle'), style: NovaTextStyles.small(p.textMuted)),
+            const SizedBox(height: 16),
+          ],
           PressableScale(
             onTap: () => Navigator.of(context).push(MaterialPageRoute<void>(builder: (_) => const AccountScreen())),
             child: Container(
@@ -73,7 +76,7 @@ class SettingsScreen extends StatelessWidget {
                       ],
                     ),
                   ),
-                  Icon(Icons.chevron_right_rounded, color: p.textDim),
+                  Icon(context.isRtl ? Icons.chevron_left_rounded : Icons.chevron_right_rounded, color: p.textDim),
                 ],
               ),
             ),
@@ -289,7 +292,7 @@ class _AboutRow extends StatelessWidget {
             ),
             if (onTap != null) ...<Widget>[
               const SizedBox(width: 3),
-              Icon(Icons.chevron_right_rounded, size: 15, color: p.textDim),
+              Icon(context.isRtl ? Icons.chevron_left_rounded : Icons.chevron_right_rounded, size: 15, color: p.textDim),
             ],
           ],
         ),
