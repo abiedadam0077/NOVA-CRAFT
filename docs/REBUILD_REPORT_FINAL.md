@@ -2,34 +2,34 @@
 
 **التاريخ:** 2026-10-19<br>
 **الفرع:** `arena/9027d464-nova-craft`<br>
-**التزام الكود الذي بُني:** `6c2b3ef6506c6936e5b2c19466fcd384e2f8360b`<br>
-**GitHub Actions:** [التشغيل الناجح 39323231274](https://github.com/abiedadam0077/NOVA-CRAFT/actions/runs/39323231274)<br>
-**وسم الإصدار:** `flutter-apk-39323231274-1`<br>
+**التزام الكود الذي بُني:** `828a0218748ae8dbec016d05f79976ca67eb33ad`<br>
+**GitHub Actions:** [التشغيل الناجح 39339756155](https://github.com/abiedadam0077/NOVA-CRAFT/actions/runs/39339756155)<br>
+**وسم الإصدار:** `flutter-apk-39339756155-1`<br>
 **مرجع المتطلبات:** `NOVA_CRAFT_MASTER_IMPLEMENTATION_BRIEF.md` من المستودع، SHA-1 `5093818629d00df7f041410f002b6bd1cf5ec0ee`.
 
 ## الخلاصة
 
 أُصلح مسار الملفات من مصدر المشكلة: Runner يولّد Manifest فعلياً من مجلد بيانات السيرفر، ينشئ مجلد النشر عند غيابه، وينشره إلى GitHub Contents؛ قارئ التطبيق يتحقق من المخطط والطوابع الزمنية والأحجام والمسارات، ويعرض حالات Workflow/الصلاحيات/الشبكة بدلاً من إظهار قائمة أو اتصال وهمي. كذلك فُصلت حالات حفظ سر Playit عن بدء Agent وTunnel وفحص Minecraft، وأضيف مسار آمن لتحديث ملفات Runner للسيرفرات الأقدم.
 
-اجتاز الكود **`flutter analyze` ومجموعة `flutter test` كاملة** في التشغيل النهائي [39323231274](https://github.com/abiedadam0077/NOVA-CRAFT/actions/runs/39323231274) على الالتزام `6c2b3ef6506c6936e5b2c19466fcd384e2f8360b`، ثم بُني APK ونُشر كإصدار prerelease مباشر. فعّل Workflow توقيع v1/v2/v3 وتحقق آلياً من v1/JAR وv2 والمحاذاة والحزمة وSHA-256. كما فُحص سبب تعطل Playit في مستودع المستخدم: سجل Agent المنقح أظهر `Failed to bind to socket: No such file or directory`؛ عُدّل Runner لاستخدام مقبس IPC داخل مجلد مؤقت خاص. لم تُجرَ بعد دورة جديدة في مستودع المستخدم بعد تحديث Runner، لذلك **اتصال Playit/Tunnel بعد الإصلاح لم يُثبت بعد**. ولا يوجد اختبار تثبيت على جهاز/محاكي Android.
+اجتاز الكود **`flutter analyze` ومجموعة `flutter test` كاملة** في التشغيل النهائي [39339756155](https://github.com/abiedadam0077/NOVA-CRAFT/actions/runs/39339756155) على الالتزام `828a0218748ae8dbec016d05f79976ca67eb33ad`، بما فيها اختبارات الانحدار لرفع JAR كبير بالتزامن مع تحديث Runner لحالة السيرفر. عولج سباق تحديث الفرع في Git Data API وأُصلح تمرير أسماء المسارات الحقيقية؛ ثم بُني APK ونُشر كإصدار prerelease مباشر. فعّل Workflow توقيع v1/v2/v3 وتحقق آلياً من v1/JAR وv2 والمحاذاة والحزمة وSHA-256. كما فُحص سبب تعطل Playit في مستودع المستخدم: سجل Agent المنقح أظهر `Failed to bind to socket: No such file or directory`؛ عُدّل Runner لاستخدام مقبس IPC داخل مجلد مؤقت خاص. لم تُجرَ بعد دورة جديدة في مستودع المستخدم بعد تحديث Runner، لذلك **اتصال Playit/Tunnel بعد الإصلاح لم يُثبت بعد**. ولا يوجد اختبار تثبيت على جهاز/محاكي Android.
 
 ## التنزيل المباشر للحزم
 
-الإصدار `[flutter-apk-39323231274-1](https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39323231274-1)` أُنشئ من الالتزام `6c2b3ef6506c6936e5b2c19466fcd384e2f8360b` بعد نجاح التحليل والاختبارات والبناء والتحقق في CI.
+الإصدار `[flutter-apk-39339756155-1](https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39339756155-1)` أُنشئ من الالتزام `828a0218748ae8dbec016d05f79976ca67eb33ad` بعد نجاح التحليل والاختبارات والبناء والتحقق في CI.
 
 ### arm64 — موصى به لمعظم أجهزة Android الحديثة
 
-[تنزيل مباشر: NOVA-CRAFT-1.0.0-arm64-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39323231274-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk)<br>
+[تنزيل مباشر: NOVA-CRAFT-1.0.0-arm64-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39339756155-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk)<br>
 الحجم: **27,373,741 بايت**<br>
-SHA-256: `042337989f0066908b5b0bd59c88fbb791e584ae75b3c831a9820071680e3119`
+SHA-256: `d4de3a277ba7144a1301964d14e61b2d8aa5f81368ba2c67e8be77a5c3bd2051`
 
 ### APK شامل
 
-[تنزيل مباشر: NOVA-CRAFT-1.0.0-release-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39323231274-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk)<br>
+[تنزيل مباشر: NOVA-CRAFT-1.0.0-release-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39339756155-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk)<br>
 الحجم: **63,935,243 بايت**<br>
-SHA-256: `16e47ee4301005f989a77cc18a6670eb5f29c3b6a08a1d4f4263d0b743f4ce75`
+SHA-256: `75c5e8fe1504a05c94eb8a5d55801f433b75fe93afddd5235f86cd6bae704861`
 
-[صفحة الإصدار وتقارير التحقق](https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39323231274-1) · [SHA256SUMS.txt](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39323231274-1/SHA256SUMS.txt) · [تقرير apksigner](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39323231274-1/signature-verification.txt)
+[صفحة الإصدار وتقارير التحقق](https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39339756155-1) · [SHA256SUMS.txt](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39339756155-1/SHA256SUMS.txt) · [تقرير apksigner](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39339756155-1/signature-verification.txt)
 
 نجح CI في إعادة تنزيل APKs المنشورة وفحص SHA-256. القيم أعلاه هي بصمات الأصول المنشورة في بيانات GitHub Releases، وملف `SHA256SUMS.txt` مرفق مرجعاً لها. تعذّر تنزيل محتوى الأصول مباشرةً من بيئة التطوير؛ لذلك لم أزعم فحص الملف محلياً.
 
@@ -62,7 +62,7 @@ SHA-256: `16e47ee4301005f989a77cc18a6670eb5f29c3b6a08a1d4f4263d0b743f4ce75`
 
 | المرحلة | النتيجة |
 |---|---|
-| `flutter analyze` على Flutter 3.35.7 | **نجح** في CI رقم 39323231274. |
+| `flutter analyze` على Flutter 3.35.7 | **نجح** في CI رقم 39339756155. |
 | `flutter test --reporter expanded` | **نجحت المجموعة كاملة** في التشغيل النهائي نفسه، بما فيها اختبارات Widget والملفات وManifest/Traversal وPlayit وRunner، واختبار socket IPC الخاص وفشل bind المحاكى. |
 | بناء APK | **نجح**؛ أُنتجت حزمة arm64 وحزمة شاملة، وأُعيد توقيعهما كمخرجات Debug غير إنتاجية. |
 | فحص `aapt` | نجح: `io.github.abiedadam0077.novacraft`, الإصدار `1.0.0`، `minSdk 26`, `targetSdk 35`. |

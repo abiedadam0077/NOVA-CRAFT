@@ -10,15 +10,15 @@ NOVA CRAFT is a native Flutter/Dart Android app for provisioning and managing Mi
 
 ## Current build and verification
 
-CI run [39323231274](https://github.com/abiedadam0077/NOVA-CRAFT/actions/runs/39323231274) completed successfully on commit `6c2b3ef6506c6936e5b2c19466fcd384e2f8360b`. With Flutter 3.35.7, `flutter analyze` and the complete `flutter test` suite passed; both release-mode APKs built, passed package/signature/alignment checks, were published as a public prerelease, then downloaded by CI and checked against SHA-256.
+CI run [39339756155](https://github.com/abiedadam0077/NOVA-CRAFT/actions/runs/39339756155) completed successfully on commit `828a0218748ae8dbec016d05f79976ca67eb33ad`. With Flutter 3.35.7, `flutter analyze` and the complete `flutter test` suite passed, including regression tests for large Modrinth JAR uploads racing with Runner commits; both APKs were built, verified, published as a public prerelease, then downloaded by CI and checked against SHA-256.
 
-- **Recommended arm64 direct download (27,373,741 bytes):** [NOVA-CRAFT-1.0.0-arm64-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39323231274-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk)
-  SHA-256: `042337989f0066908b5b0bd59c88fbb791e584ae75b3c831a9820071680e3119`
-- **Universal direct download (63,935,243 bytes):** [NOVA-CRAFT-1.0.0-release-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39323231274-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk)
-  SHA-256: `16e47ee4301005f989a77cc18a6670eb5f29c3b6a08a1d4f4263d0b743f4ce75`
-- [Release page and verification reports](https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39323231274-1) · [SHA256SUMS.txt](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39323231274-1/SHA256SUMS.txt) · [apksigner report](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39323231274-1/signature-verification.txt)
+- **Recommended arm64 direct download (27,373,741 bytes):** [NOVA-CRAFT-1.0.0-arm64-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39339756155-1/NOVA-CRAFT-1.0.0-arm64-debugsigned.apk)
+  SHA-256: `d4de3a277ba7144a1301964d14e61b2d8aa5f81368ba2c67e8be77a5c3bd2051`
+- **Universal direct download (63,935,243 bytes):** [NOVA-CRAFT-1.0.0-release-debugsigned.apk](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39339756155-1/NOVA-CRAFT-1.0.0-release-debugsigned.apk)
+  SHA-256: `75c5e8fe1504a05c94eb8a5d55801f433b75fe93afddd5235f86cd6bae704861`
+- [Release page and verification reports](https://github.com/abiedadam0077/NOVA-CRAFT/releases/tag/flutter-apk-39339756155-1) · [SHA256SUMS.txt](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39339756155-1/SHA256SUMS.txt) · [apksigner report](https://github.com/abiedadam0077/NOVA-CRAFT/releases/download/flutter-apk-39339756155-1/signature-verification.txt)
 
-CI enabled v1/v2/v3 signing and verified the v1/JAR and v2 schemes, ZIP alignment, package metadata, and downloaded-file checksums. The manifest still declares `minSdk 26`. The Runner fix for the observed Playit IPC socket-path failure is included, but a successful live connection still needs to be confirmed after updating and rerunning the user's server repository.
+CI enabled v1/v2/v3 signing and verified the v1/JAR and v2 schemes, ZIP alignment, package metadata, and downloaded-file checksums. The manifest still declares `minSdk 26`. Large JAR uploads now rebuild against the latest branch head and retry when the active Runner commits status concurrently; Git tree paths retain real filenames. The Runner fix for the observed Playit IPC socket-path failure is included, but a successful live connection still needs to be confirmed after updating and rerunning the user's server repository.
 
 These are AOT release-mode APKs but **debug-signed**, not production-signed. The repository has no production keystore; CI creates an ephemeral debug keystore only for this non-production build. Because that signing key is not a stable release key, Android may refuse to install this APK over an older build signed with another key. Back up anything needed, then uninstall the older app before installing this one; uninstalling removes local app data. The Android emulator smoke workflow was attempted previously but GitHub returned HTTP 403 for workflow dispatch, so installation/launch on a device or emulator is not verified.
 
